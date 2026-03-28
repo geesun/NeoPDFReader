@@ -4,7 +4,6 @@ import { bytesToBlobUrl } from "../../services/tauriApi";
 import { useDocumentStore } from "../../store/documentStore";
 import { useSearchStore } from "../../store/searchStore";
 import "./PageViewport.css";
-
 // ─── Front-end page image cache ───────────────────────────────────────────────
 //
 // Stores blob URLs for pages that have already been rendered.
@@ -167,6 +166,10 @@ const PageCanvas = memo(function PageCanvas({
 
 // ─── PageViewport ─────────────────────────────────────────────────────────────
 
+// Debounce delay (ms) for saving the last-viewed page to the backend.
+// Short enough to be timely, long enough not to thrash disk on fast scrolling.
+const SAVE_DEBOUNCE_MS = 800;
+
 export default function PageViewport() {
   const {
     isOpen,
@@ -177,6 +180,7 @@ export default function PageViewport() {
     currentPage,
     setCurrentPage,
     documentId,
+    initialPage,
   } = useDocumentStore();
 
   // Clear the front-end image cache whenever a new document is opened.
@@ -186,6 +190,11 @@ export default function PageViewport() {
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(800);
   const rafRef = useRef<number | null>(null);
+  // Keep a ref to pageOffsets so effects can read the latest value without
+  // needing to be in their dependency arrays.
+  const pageOffsetsRef = useRef<number[]>([]);
+  // Debounce timer for save_last_page
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Observe container resize
   useEffect(() => {
@@ -196,14 +205,6 @@ export default function PageViewport() {
     observer.observe(containerRef.current);
     return () => observer.disconnect();
   }, []);
-
-  // Reset scroll on new document
-  useEffect(() => {
-    if (containerRef.current) {
-      containerRef.current.scrollTop = 0;
-      setScrollTop(0);
-    }
-  }, [documentId]);
 
   const gap = 12;
 
@@ -218,6 +219,29 @@ export default function PageViewport() {
     return { pageOffsets: offsets, totalHeight: y };
   }, [pageSizes, scale]);
 
+  // Keep the ref in sync so scroll-restoration effect can read latest offsets.
+  pageOffsetsRef.current = pageOffsets;
+
+  // Restore scroll position when a new document is opened.
+  // We run this effect whenever documentId changes *and* pageOffsets has been
+  // populated (length > 0). The ref ensures we always read the latest offsets.
+  useEffect(() => {
+    if (!containerRef.current) return;
+    if (initialPage === 0) {
+      // First page or no history — just reset to top.
+      containerRef.current.scrollTop = 0;
+      setScrollTop(0);
+    } else {
+      // Restore saved position. pageOffsetsRef.current is already up-to-date
+      // because it's set synchronously before this effect fires.
+      const offsets = pageOffsetsRef.current;
+      const top = offsets[Math.min(initialPage, offsets.length - 1)] ?? 0;
+      containerRef.current.scrollTop = top;
+      setScrollTop(top);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [documentId]);
+
   // RAF-throttled scroll handler
   const handleScroll = useCallback(() => {
     if (rafRef.current !== null) return;
@@ -226,26 +250,38 @@ export default function PageViewport() {
       if (!containerRef.current) return;
       const st = containerRef.current.scrollTop;
       setScrollTop(st);
-      if (pageOffsets.length === 0) return;
-      let lo = 0, hi = pageOffsets.length - 1;
+      if (pageOffsetsRef.current.length === 0) return;
+      const offsets = pageOffsetsRef.current;
+      let lo = 0, hi = offsets.length - 1;
       while (lo < hi) {
         const mid = (lo + hi + 1) >> 1;
-        if (pageOffsets[mid] <= st) lo = mid;
+        if (offsets[mid] <= st) lo = mid;
         else hi = mid - 1;
       }
-      if (lo !== currentPage) setCurrentPage(lo);
+      if (lo !== currentPage) {
+        setCurrentPage(lo);
+        // Debounced persist of reading position
+        if (saveTimerRef.current !== null) clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = setTimeout(() => {
+          saveTimerRef.current = null;
+          const path = useDocumentStore.getState().filePath;
+          if (path) {
+            invoke("save_last_page", { path, page: lo }).catch(() => {/* non-critical */});
+          }
+        }, SAVE_DEBOUNCE_MS);
+      }
     });
-  }, [pageOffsets, currentPage, setCurrentPage]);
+  }, [currentPage, setCurrentPage]);
 
   const scrollToPage = useCallback(
     (pageNum: number) => {
-      if (!containerRef.current || pageOffsets.length === 0) return;
-      const top = pageOffsets[Math.min(pageNum, pageOffsets.length - 1)] ?? 0;
+      if (!containerRef.current || pageOffsetsRef.current.length === 0) return;
+      const top = pageOffsetsRef.current[Math.min(pageNum, pageOffsetsRef.current.length - 1)] ?? 0;
       // Instant jump — no scroll animation.  The image cache ensures the page
       // appears immediately; a smooth scroll would only add perceived delay.
       containerRef.current.scrollTop = top;
     },
-    [pageOffsets]
+    []
   );
 
   useEffect(() => {

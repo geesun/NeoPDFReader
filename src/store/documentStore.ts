@@ -13,6 +13,8 @@ interface DocumentState {
   currentPage: number;
   scale: number;
   rotation: number;
+  /** Page to restore on open (from reading history). 0 = start from beginning. */
+  initialPage: number;
 
   setDocument: (info: DocumentInfo, path: string) => void;
   /** Append streamed page sizes arriving via "page-sizes-chunk" events. */
@@ -33,6 +35,7 @@ export const useDocumentStore = create<DocumentState>((set) => ({
   currentPage: 0,
   scale: 1.0,
   rotation: 0,
+  initialPage: 0,
 
   setDocument: (info, path) =>
     set((state) => {
@@ -48,6 +51,7 @@ export const useDocumentStore = create<DocumentState>((set) => ({
       for (let i = 0; i < info.page_sizes.length; i++) {
         sizes[i] = info.page_sizes[i];
       }
+      const restoredPage = Math.min(info.last_page ?? 0, total - 1);
       return {
         isOpen: true,
         filePath: path,
@@ -55,9 +59,10 @@ export const useDocumentStore = create<DocumentState>((set) => ({
         metadata: info.metadata,
         pageSizes: sizes,
         pageCount: total,
-        currentPage: 0,
+        currentPage: restoredPage,
         scale: 1.0,
         rotation: 0,
+        initialPage: restoredPage,
       };
     }),
 
@@ -81,6 +86,7 @@ export const useDocumentStore = create<DocumentState>((set) => ({
       pageSizes: [],
       pageCount: 0,
       currentPage: 0,
+      initialPage: 0,
     }),
 
   setCurrentPage: (page) => set({ currentPage: page }),

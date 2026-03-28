@@ -2,12 +2,14 @@ use std::path::Path;
 use std::sync::Arc;
 use tauri::State;
 use tauri::Emitter;
+use tauri::Manager;
 
 use crate::state::AppState;
 use crate::pdf::PdfDocument;
 use crate::pdf::document::{DocumentMetadata, PageSize, OutlineItem};
 use crate::search::SearchIndexer;
 use crate::scheduler::TaskScheduler;
+use crate::history;
 
 #[derive(serde::Serialize)]
 pub struct DocumentInfo {
@@ -15,6 +17,9 @@ pub struct DocumentInfo {
     /// Page sizes for the first batch of pages (immediately available).
     /// Remaining pages arrive via "page-sizes-chunk" events.
     pub page_sizes: Vec<PageSize>,
+    /// Last page the user was on when this file was previously closed.
+    /// 0 means the file has not been opened before (or was last seen at page 0).
+    pub last_page: usize,
 }
 
 /// Emitted for every chunk of page sizes after the first batch.
@@ -53,9 +58,18 @@ pub async fn open_pdf(
     .await
     .map_err(|e| format!("open task panicked: {}", e))??;
 
+    // Look up the last page from persistent reading history.
+    let last_page = {
+        match app_handle.path().app_data_dir() {
+            Ok(data_dir) => history::get_last_page(&data_dir, &path),
+            Err(_) => 0,
+        }
+    };
+
     let info = DocumentInfo {
         metadata: doc.metadata.clone(),
         page_sizes: eager_sizes,
+        last_page,
     };
 
     let doc = Arc::new(doc);
@@ -170,4 +184,18 @@ pub fn get_document_properties(
     let doc = state.document.read();
     let doc = doc.as_ref().ok_or("No document open")?;
     Ok(doc.metadata.clone())
+}
+
+/// Persist the last-viewed page for a file so it can be restored on reopen.
+/// Called from the frontend (debounced) whenever the visible page changes.
+#[tauri::command]
+pub fn save_last_page(
+    path: String,
+    page: usize,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    let data_dir = app_handle.path().app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    history::set_last_page(&data_dir, &path, page);
+    Ok(())
 }

@@ -19,6 +19,8 @@ export interface DocumentMetadata {
 export interface DocumentInfo {
   metadata: DocumentMetadata;
   page_sizes: PageSize[];
+  /** Last page the user was viewing when this file was previously closed. 0 = first open. */
+  last_page: number;
 }
 
 export interface OutlineItem {

@@ -4,6 +4,7 @@ mod cache;
 mod commands;
 mod scheduler;
 mod state;
+mod history;
 
 use state::AppState;
 
@@ -19,6 +20,7 @@ pub fn run() {
             commands::document::open_pdf,
             commands::document::get_outline,
             commands::document::get_document_properties,
+            commands::document::save_last_page,
             commands::render::render_page,
             commands::render::get_thumbnail,
             commands::search::search_text,
