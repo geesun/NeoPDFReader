@@ -1,0 +1,62 @@
+// Types shared between frontend and Rust backend
+
+export interface PageSize {
+  width: number;
+  height: number;
+}
+
+export interface DocumentMetadata {
+  title: string;
+  author: string;
+  subject: string;
+  creator: string;
+  producer: string;
+  page_count: number;
+  file_path: string;
+  file_size: number;
+}
+
+export interface DocumentInfo {
+  metadata: DocumentMetadata;
+  page_sizes: PageSize[];
+}
+
+export interface OutlineItem {
+  title: string;
+  page: number;
+  children: OutlineItem[];
+}
+
+export interface SearchHighlight {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface SearchResult {
+  page_num: number;
+  snippet: string;
+  highlights: SearchHighlight[];
+  match_count: number;
+}
+
+export interface SearchOptions {
+  case_sensitive: boolean;
+  whole_word: boolean;
+  max_results: number;
+}
+
+export interface IndexProgress {
+  current: number;
+  total: number;
+  progress: number;
+}
+
+export interface IndexStatus {
+  progress: number;
+  is_complete: boolean;
+  indexed_count: number;
+}
+
+export type ViewMode = "single" | "continuous";

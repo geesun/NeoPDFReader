@@ -1,0 +1,63 @@
+import { invoke } from "@tauri-apps/api/core";
+import type {
+  DocumentInfo,
+  OutlineItem,
+  DocumentMetadata,
+  SearchResult,
+  SearchOptions,
+  IndexStatus,
+} from "../types";
+
+export async function openPdf(path: string): Promise<DocumentInfo> {
+  return invoke<DocumentInfo>("open_pdf", { path });
+}
+
+export async function renderPage(
+  pageNum: number,
+  scale: number,
+  rotation: number
+): Promise<number[] | Uint8Array | ArrayBuffer> {
+  return invoke("render_page", {
+    pageNum,
+    scale,
+    rotation,
+  });
+}
+
+export async function getThumbnail(pageNum: number): Promise<number[] | Uint8Array | ArrayBuffer> {
+  return invoke("get_thumbnail", { pageNum });
+}
+
+export async function getOutline(): Promise<OutlineItem[]> {
+  return invoke<OutlineItem[]>("get_outline");
+}
+
+export async function getDocumentProperties(): Promise<DocumentMetadata> {
+  return invoke<DocumentMetadata>("get_document_properties");
+}
+
+export async function searchText(
+  queryStr: string,
+  options?: SearchOptions
+): Promise<SearchResult[]> {
+  return invoke<SearchResult[]>("search_text", { queryStr, options });
+}
+
+export async function getIndexStatus(): Promise<IndexStatus> {
+  return invoke<IndexStatus>("get_index_status");
+}
+
+/// Convert raw byte data from Rust (number[], Uint8Array, or ArrayBuffer) to a blob URL
+export function bytesToBlobUrl(bytes: number[] | Uint8Array | ArrayBuffer): string {
+  let uint8: Uint8Array;
+  if (bytes instanceof ArrayBuffer) {
+    uint8 = new Uint8Array(bytes);
+  } else if (bytes instanceof Uint8Array) {
+    uint8 = bytes;
+  } else {
+    // number[]
+    uint8 = new Uint8Array(bytes);
+  }
+  const blob = new Blob([uint8], { type: "image/png" });
+  return URL.createObjectURL(blob);
+}

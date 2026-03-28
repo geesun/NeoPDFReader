@@ -1,0 +1,11 @@
+#!/bin/bash
+# Wrapper for xcrun that uses llvm-ar for 'ar' commands to support @file syntax.
+# macOS ar doesn't support @file (response file) syntax and has argument length limits.
+
+if [ "$1" = "ar" ]; then
+    shift  # remove "ar"
+    exec /opt/homebrew/opt/llvm/bin/llvm-ar "$@"
+else
+    # For everything else, pass through to real xcrun
+    exec /usr/bin/xcrun "$@"
+fi
