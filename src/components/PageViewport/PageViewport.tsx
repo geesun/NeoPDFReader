@@ -103,7 +103,6 @@ const PageCanvas = memo(function PageCanvas({
   const [displayedSrc, setDisplayedSrc] = useState<string | null>(
     () => pageImageCache.get(imageKey) ?? null
   );
-  const [loading, setLoading] = useState(() => !pageImageCache.has(imageKey));
 
   // The key we last successfully fetched.  Stored in a ref so priority changes
   // (overscan → visible) don't trigger a redundant re-fetch.
@@ -117,7 +116,6 @@ const PageCanvas = memo(function PageCanvas({
     if (pageImageCache.has(imageKey)) {
       const cached = pageImageCache.get(imageKey)!;
       if (displayedSrc !== cached) setDisplayedSrc(cached);
-      setLoading(false);
       fetchedKey.current = imageKey;
       return;
     }
@@ -126,24 +124,18 @@ const PageCanvas = memo(function PageCanvas({
     if (fetchedKey.current === imageKey) return;
 
     let cancelled = false;
-    // Only show the spinner if we have no image at all to show yet.
-    if (displayedSrc === null) setLoading(true);
 
     invoke<ArrayBuffer>("render_page", { pageNum, scale, rotation, priority })
       .then((buf) => {
         if (cancelled) return;
         const url = bytesToBlobUrl(buf);
-        // Store in the module-level cache so other instances / future mounts
-        // of this page can skip the render round-trip entirely.
         pageImageCache.set(imageKey, url);
         fetchedKey.current = imageKey;
         setDisplayedSrc(url);
-        setLoading(false);
       })
       .catch((err) => {
         if (cancelled) return;
         console.error(`Failed to render page ${pageNum}:`, err);
-        setLoading(false);
       });
 
     return () => {
@@ -166,11 +158,7 @@ const PageCanvas = memo(function PageCanvas({
           draggable={false}
         />
       )}
-      {loading && displayedSrc === null && (
-        <div className="page-loading">
-          <div className="page-loading-spinner" />
-        </div>
-      )}
+      {/* No spinner — white background shows while rendering, image fades in naturally */}
       <PageHighlights pageNum={pageNum} scale={scale} />
       <div className="page-number-label">{pageNum + 1}</div>
     </div>
@@ -253,7 +241,9 @@ export default function PageViewport() {
     (pageNum: number) => {
       if (!containerRef.current || pageOffsets.length === 0) return;
       const top = pageOffsets[Math.min(pageNum, pageOffsets.length - 1)] ?? 0;
-      containerRef.current.scrollTo({ top, behavior: "smooth" });
+      // Instant jump — no scroll animation.  The image cache ensures the page
+      // appears immediately; a smooth scroll would only add perceived delay.
+      containerRef.current.scrollTop = top;
     },
     [pageOffsets]
   );
