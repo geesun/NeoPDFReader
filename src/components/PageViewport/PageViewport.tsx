@@ -183,7 +183,7 @@ const PageCanvas = memo(function PageCanvas({
       )}
       {/* No spinner — white background shows while rendering, image fades in naturally */}
       <PageHighlights pageNum={pageNum} scale={scale} />
-      <div className="page-number-label">{pageNum + 1}</div>
+
     </div>
   );
 });
