@@ -69,20 +69,34 @@ const PageCanvas = memo(function PageCanvas({
   documentId,
   priority,
 }: PageCanvasProps) {
-  const [imgSrc, setImgSrc] = useState<string | null>(null);
+  // `displayedSrc` is what is currently shown — it persists across re-fetches
+  // so the old image stays visible while the new one loads (no blank flash).
+  const [displayedSrc, setDisplayedSrc] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const prevBlobUrl = useRef<string | null>(null);
+  // Track the priority used to originally fetch the current image so we know
+  // when we genuinely need a re-fetch (scale/rotation/doc change) vs. just a
+  // priority reclassification (overscan → visible).
+  const fetchedKey = useRef<string>("");
 
   const displayWidth = width * scale;
   const displayHeight = height * scale;
 
   useEffect(() => {
+    // Key identifies *what* to render — priority is intentionally excluded.
+    // A priority change only affects queue ordering, not the rendered content.
+    const key = `${documentId}:${pageNum}:${scale}:${rotation}`;
+    if (fetchedKey.current === key && displayedSrc !== null) {
+      // Already have the correct image for this key — nothing to do.
+      return;
+    }
+
     let cancelled = false;
+    // Show loading indicator only if we don't have any image yet.
+    // If we already have an image (e.g. scale changed), keep showing it
+    // until the new one arrives — no blank flash.
+    if (displayedSrc === null) setLoading(true);
 
-    setLoading(true);
-    setImgSrc(null);
-
-    // Use invoke directly so we can pass `priority` and receive ArrayBuffer.
     invoke<ArrayBuffer>("render_page", {
       pageNum,
       scale,
@@ -91,10 +105,12 @@ const PageCanvas = memo(function PageCanvas({
     })
       .then((buf) => {
         if (cancelled) return;
+        // Revoke the old blob URL only after the new image is ready.
         if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current);
         const url = bytesToBlobUrl(buf);
         prevBlobUrl.current = url;
-        setImgSrc(url);
+        fetchedKey.current = key;
+        setDisplayedSrc(url);
         setLoading(false);
       })
       .catch((err) => {
@@ -106,7 +122,10 @@ const PageCanvas = memo(function PageCanvas({
     return () => {
       cancelled = true;
     };
-  }, [pageNum, scale, rotation, documentId, priority]);
+    // `priority` deliberately omitted from deps — a priority change only
+    // affects queue ordering, not which image we render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageNum, scale, rotation, documentId]);
 
   useEffect(
     () => () => {
@@ -120,18 +139,19 @@ const PageCanvas = memo(function PageCanvas({
       className="page-canvas"
       style={{ width: displayWidth, height: displayHeight, position: "relative" }}
     >
-      {loading && (
-        <div className="page-loading">
-          <div className="page-loading-spinner" />
-        </div>
-      )}
-      {imgSrc && (
+      {displayedSrc && (
         <img
-          src={imgSrc}
+          src={displayedSrc}
           alt={`Page ${pageNum + 1}`}
           style={{ width: "100%", height: "100%", display: "block" }}
           draggable={false}
         />
+      )}
+      {/* Spinner overlaid on top — only shown while loading AND no image yet */}
+      {loading && displayedSrc === null && (
+        <div className="page-loading">
+          <div className="page-loading-spinner" />
+        </div>
       )}
       <PageHighlights pageNum={pageNum} scale={scale} />
       <div className="page-number-label">{pageNum + 1}</div>

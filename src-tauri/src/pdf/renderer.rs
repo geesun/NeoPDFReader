@@ -177,6 +177,41 @@ impl RenderPool {
             .map_err(|_| "Render worker dropped reply".to_string())?
     }
 
+    /// Pre-warm all worker threads by sending a cheap no-op render of page 0.
+    /// This forces each worker to open the Document eagerly so the real first
+    /// render_page call doesn't pay the Document::open cold-start cost.
+    pub fn prewarm(&self, file_path: String) {
+        let num_workers = {
+            let guard = self.queue.heap.lock().unwrap();
+            // We don't track num_threads directly; send enough tasks to
+            // saturate all workers.  8 is safely above the max of 4.
+            drop(guard);
+            8usize
+        };
+        for _ in 0..num_workers {
+            let (reply_tx, _reply_rx) = oneshot::channel::<Result<Vec<u8>, String>>();
+            let mut guard = self.queue.heap.lock().unwrap();
+            let seq = guard.1;
+            guard.1 += 1;
+            guard.0.push(RenderTask {
+                // Use Prefetch priority so real Visible renders preempt these.
+                priority: RenderPriority::Prefetch,
+                seq,
+                file_path: file_path.clone(),
+                page_num: 0,
+                scale: 1.0,
+                rotation: 0,
+                thumbnail_max_width: None,
+                reply: reply_tx,
+            });
+            drop(guard);
+            self.queue.condvar.notify_one();
+            // _reply_rx dropped immediately → reply channel is closed →
+            // worker will detect `task.reply.is_closed()` and skip the render
+            // after opening the document — we only want the open cost paid.
+        }
+    }
+
     /// Submit a thumbnail render (lowest priority).
     pub async fn thumbnail(
         &self,

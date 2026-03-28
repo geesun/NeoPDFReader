@@ -9,11 +9,16 @@ import SearchBar from "./components/SearchBar";
 import Sidebar from "./components/Sidebar";
 import PageViewport from "./components/PageViewport";
 import StatusBar from "./components/StatusBar";
-import type { IndexProgress } from "./types";
+import type { IndexProgress, PageSize } from "./types";
 import "./App.css";
 
+interface PageSizesChunk {
+  start: number;
+  sizes: PageSize[];
+}
+
 function App() {
-  const { setDocument } = useDocumentStore();
+  const { setDocument, appendPageSizes } = useDocumentStore();
   const { setIndexProgress, setIndexComplete } = useSearchStore();
 
   // Listen for backend events
@@ -26,11 +31,17 @@ function App() {
       setIndexComplete();
     });
 
+    // Stream remaining page sizes for large documents
+    const unlistenChunk = listen<PageSizesChunk>("page-sizes-chunk", (event) => {
+      appendPageSizes(event.payload.start, event.payload.sizes);
+    });
+
     return () => {
       unlistenProgress.then((fn) => fn());
       unlistenComplete.then((fn) => fn());
+      unlistenChunk.then((fn) => fn());
     };
-  }, [setIndexProgress, setIndexComplete]);
+  }, [setIndexProgress, setIndexComplete, appendPageSizes]);
 
   // Global keyboard shortcuts
   useEffect(() => {

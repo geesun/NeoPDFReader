@@ -43,9 +43,21 @@ pub struct PdfDocument {
 }
 
 impl PdfDocument {
-    /// Open a PDF file, read metadata and all page sizes, then discard the
-    /// mupdf handle.  Fast for most PDFs because MediaBox is in the xref table.
+    /// Open a PDF file, read metadata and ALL page sizes, then discard the
+    /// mupdf handle.
     pub fn open(path: &Path) -> Result<Self, String> {
+        let (doc, page_sizes, _) = Self::open_partial(path, usize::MAX)?;
+        Ok(doc)
+    }
+
+    /// Open a PDF file and read metadata + up to `eager_pages` page sizes
+    /// immediately.  Returns `(PdfDocument, eager_sizes, total_page_count)`.
+    /// The returned `PdfDocument` stores only the metadata; page_sizes in the
+    /// struct is left empty — callers are responsible for streaming the rest.
+    pub fn open_partial(
+        path: &Path,
+        eager_pages: usize,
+    ) -> Result<(Self, Vec<PageSize>, usize), String> {
         let file_size = std::fs::metadata(path)
             .map_err(|e| format!("Failed to read file metadata: {}", e))?
             .len();
@@ -57,7 +69,6 @@ impl PdfDocument {
             doc.page_count()
                 .map_err(|e| format!("Failed to get page count: {}", e))? as usize;
 
-        // Extract metadata
         let metadata = DocumentMetadata {
             title: doc.metadata(MetadataName::Title).unwrap_or_default(),
             author: doc.metadata(MetadataName::Author).unwrap_or_default(),
@@ -69,9 +80,10 @@ impl PdfDocument {
             file_size,
         };
 
-        // Pre-compute all page sizes for virtual scrolling — only reads MediaBox, fast.
-        let mut page_sizes = Vec::with_capacity(page_count);
-        for i in 0..page_count {
+        // Read eager_pages page sizes immediately.
+        let eager_count = eager_pages.min(page_count);
+        let mut page_sizes = Vec::with_capacity(eager_count);
+        for i in 0..eager_count {
             let page = doc
                 .load_page(i as i32)
                 .map_err(|e| format!("Failed to load page {}: {}", i, e))?;
@@ -84,12 +96,16 @@ impl PdfDocument {
             });
         }
 
-        // `doc` is dropped here — the mupdf handle is released.
-        Ok(PdfDocument {
+        // doc is dropped here — the mupdf handle is released.
+        let pdf_doc = PdfDocument {
             metadata,
-            page_sizes,
+            // page_sizes is intentionally empty for the partial case;
+            // the full sizes are streamed separately.
+            page_sizes: Vec::new(),
             file_path: path.to_owned(),
-        })
+        };
+
+        Ok((pdf_doc, page_sizes, page_count))
     }
 
     pub fn page_count(&self) -> usize {
