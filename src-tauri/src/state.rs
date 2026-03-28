@@ -27,7 +27,7 @@ impl AppState {
         AppState {
             document: RwLock::new(None),
             indexer: RwLock::new(None),
-            bitmap_cache: BitmapCache::new(50),
+            bitmap_cache: BitmapCache::new(200),
             render_pool: RenderPool::new(num_threads),
         }
     }

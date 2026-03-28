@@ -5,21 +5,35 @@ import { useDocumentStore } from "../../store/documentStore";
 import { useSearchStore } from "../../store/searchStore";
 import "./PageViewport.css";
 
-// ─── PageCanvas ───────────────────────────────────────────────────────────────
+// ─── Front-end page image cache ───────────────────────────────────────────────
+//
+// Stores blob URLs for pages that have already been rendered.
+// Key: `${documentId}:${pageNum}:${scaleKey}:${rotation}`
+// When a PageCanvas mounts and its key is already in this map, it shows the
+// image immediately with zero loading flash.
+// When a new document is opened (documentId changes) the old entries are
+// revoked and cleared.
 
-interface PageCanvasProps {
-  pageNum: number;
-  width: number;
-  height: number;
-  scale: number;
-  rotation: number;
-  documentId: number;
-  /** 0 = visible (highest), 1 = prefetch, 2 = thumbnail */
-  priority: 0 | 1 | 2;
+const pageImageCache = new Map<string, string>();
+let cachedDocumentId = -1;
+
+function makeImageKey(documentId: number, pageNum: number, scale: number, rotation: number) {
+  // Round scale to 3 decimal places so tiny float noise doesn't create duplicate entries.
+  return `${documentId}:${pageNum}:${scale.toFixed(3)}:${rotation}`;
 }
 
-// Highlights are split into a separate component so search-result navigation
-// only re-renders the highlight overlay, not the image.
+function clearImageCacheForDoc(documentId: number) {
+  if (cachedDocumentId === documentId) return;
+  // Revoke all old blob URLs to free browser memory.
+  for (const url of pageImageCache.values()) {
+    URL.revokeObjectURL(url);
+  }
+  pageImageCache.clear();
+  cachedDocumentId = documentId;
+}
+
+// ─── PageHighlights ───────────────────────────────────────────────────────────
+
 const PageHighlights = memo(function PageHighlights({
   pageNum,
   scale,
@@ -60,6 +74,19 @@ const PageHighlights = memo(function PageHighlights({
   );
 });
 
+// ─── PageCanvas ───────────────────────────────────────────────────────────────
+
+interface PageCanvasProps {
+  pageNum: number;
+  width: number;
+  height: number;
+  scale: number;
+  rotation: number;
+  documentId: number;
+  /** 0 = visible (highest priority), 1 = prefetch */
+  priority: 0 | 1;
+}
+
 const PageCanvas = memo(function PageCanvas({
   pageNum,
   width,
@@ -69,47 +96,47 @@ const PageCanvas = memo(function PageCanvas({
   documentId,
   priority,
 }: PageCanvasProps) {
-  // `displayedSrc` is what is currently shown — it persists across re-fetches
-  // so the old image stays visible while the new one loads (no blank flash).
-  const [displayedSrc, setDisplayedSrc] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const prevBlobUrl = useRef<string | null>(null);
-  // Track the priority used to originally fetch the current image so we know
-  // when we genuinely need a re-fetch (scale/rotation/doc change) vs. just a
-  // priority reclassification (overscan → visible).
-  const fetchedKey = useRef<string>("");
+  const imageKey = makeImageKey(documentId, pageNum, scale, rotation);
+
+  // Initialise directly from the front-end cache so the first render already
+  // has an image — no loading flash for previously seen pages.
+  const [displayedSrc, setDisplayedSrc] = useState<string | null>(
+    () => pageImageCache.get(imageKey) ?? null
+  );
+  const [loading, setLoading] = useState(() => !pageImageCache.has(imageKey));
+
+  // The key we last successfully fetched.  Stored in a ref so priority changes
+  // (overscan → visible) don't trigger a redundant re-fetch.
+  const fetchedKey = useRef<string>(displayedSrc ? imageKey : "");
 
   const displayWidth = width * scale;
   const displayHeight = height * scale;
 
   useEffect(() => {
-    // Key identifies *what* to render — priority is intentionally excluded.
-    // A priority change only affects queue ordering, not the rendered content.
-    const key = `${documentId}:${pageNum}:${scale}:${rotation}`;
-    if (fetchedKey.current === key && displayedSrc !== null) {
-      // Already have the correct image for this key — nothing to do.
+    // If this key is already in the front-end cache, we're done.
+    if (pageImageCache.has(imageKey)) {
+      const cached = pageImageCache.get(imageKey)!;
+      if (displayedSrc !== cached) setDisplayedSrc(cached);
+      setLoading(false);
+      fetchedKey.current = imageKey;
       return;
     }
 
+    // Already fetching this exact key from a previous render — skip.
+    if (fetchedKey.current === imageKey) return;
+
     let cancelled = false;
-    // Show loading indicator only if we don't have any image yet.
-    // If we already have an image (e.g. scale changed), keep showing it
-    // until the new one arrives — no blank flash.
+    // Only show the spinner if we have no image at all to show yet.
     if (displayedSrc === null) setLoading(true);
 
-    invoke<ArrayBuffer>("render_page", {
-      pageNum,
-      scale,
-      rotation,
-      priority,
-    })
+    invoke<ArrayBuffer>("render_page", { pageNum, scale, rotation, priority })
       .then((buf) => {
         if (cancelled) return;
-        // Revoke the old blob URL only after the new image is ready.
-        if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current);
         const url = bytesToBlobUrl(buf);
-        prevBlobUrl.current = url;
-        fetchedKey.current = key;
+        // Store in the module-level cache so other instances / future mounts
+        // of this page can skip the render round-trip entirely.
+        pageImageCache.set(imageKey, url);
+        fetchedKey.current = imageKey;
         setDisplayedSrc(url);
         setLoading(false);
       })
@@ -122,17 +149,9 @@ const PageCanvas = memo(function PageCanvas({
     return () => {
       cancelled = true;
     };
-    // `priority` deliberately omitted from deps — a priority change only
-    // affects queue ordering, not which image we render.
+    // priority intentionally excluded — only affects queue ordering, not output.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageNum, scale, rotation, documentId]);
-
-  useEffect(
-    () => () => {
-      if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current);
-    },
-    []
-  );
 
   return (
     <div
@@ -147,7 +166,6 @@ const PageCanvas = memo(function PageCanvas({
           draggable={false}
         />
       )}
-      {/* Spinner overlaid on top — only shown while loading AND no image yet */}
       {loading && displayedSrc === null && (
         <div className="page-loading">
           <div className="page-loading-spinner" />
@@ -173,21 +191,19 @@ export default function PageViewport() {
     documentId,
   } = useDocumentStore();
 
-  // containerRef is ALWAYS attached to the same outermost div.
+  // Clear the front-end image cache whenever a new document is opened.
+  clearImageCacheForDoc(documentId);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(800);
-
-  // Track the latest raf handle so we can cancel if needed
   const rafRef = useRef<number | null>(null);
 
   // Observe container resize
   useEffect(() => {
     if (!containerRef.current) return;
     const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        setViewportHeight(entry.contentRect.height);
-      }
+      for (const entry of entries) setViewportHeight(entry.contentRect.height);
     });
     observer.observe(containerRef.current);
     return () => observer.disconnect();
@@ -214,19 +230,16 @@ export default function PageViewport() {
     return { pageOffsets: offsets, totalHeight: y };
   }, [pageSizes, scale]);
 
-  // Throttle scroll handler with requestAnimationFrame to avoid 60 React
-  // state updates per second.
+  // RAF-throttled scroll handler
   const handleScroll = useCallback(() => {
-    if (rafRef.current !== null) return; // already scheduled
+    if (rafRef.current !== null) return;
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
       if (!containerRef.current) return;
       const st = containerRef.current.scrollTop;
       setScrollTop(st);
-
       if (pageOffsets.length === 0) return;
-      let lo = 0,
-        hi = pageOffsets.length - 1;
+      let lo = 0, hi = pageOffsets.length - 1;
       while (lo < hi) {
         const mid = (lo + hi + 1) >> 1;
         if (pageOffsets[mid] <= st) lo = mid;
@@ -247,39 +260,25 @@ export default function PageViewport() {
 
   useEffect(() => {
     (window as any).__scrollToPage = scrollToPage;
-    return () => {
-      delete (window as any).__scrollToPage;
-    };
+    return () => { delete (window as any).__scrollToPage; };
   }, [scrollToPage]);
 
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
+    const onKey = (e: KeyboardEvent) => {
       if (!isOpen) return;
       if ((e.target as HTMLElement).tagName === "INPUT") return;
       switch (e.key) {
-        case "PageDown":
-          e.preventDefault();
-          scrollToPage(Math.min(currentPage + 1, pageCount - 1));
-          break;
-        case "PageUp":
-          e.preventDefault();
-          scrollToPage(Math.max(currentPage - 1, 0));
-          break;
-        case "Home":
-          e.preventDefault();
-          scrollToPage(0);
-          break;
-        case "End":
-          e.preventDefault();
-          scrollToPage(pageCount - 1);
-          break;
+        case "PageDown": e.preventDefault(); scrollToPage(Math.min(currentPage + 1, pageCount - 1)); break;
+        case "PageUp":   e.preventDefault(); scrollToPage(Math.max(currentPage - 1, 0)); break;
+        case "Home":     e.preventDefault(); scrollToPage(0); break;
+        case "End":      e.preventDefault(); scrollToPage(pageCount - 1); break;
       }
     };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, [isOpen, currentPage, pageCount, scrollToPage]);
 
-  // Compute visible + overscan page range using binary search.
+  // Compute visible + overscan range
   const { visibleStart, visibleEnd, renderStart, renderEnd } = useMemo(() => {
     if (pageOffsets.length === 0)
       return { visibleStart: 0, visibleEnd: -1, renderStart: 0, renderEnd: -1 };
@@ -287,8 +286,7 @@ export default function PageViewport() {
     const overscan = 3;
     const viewBottom = scrollTop + viewportHeight;
 
-    let lo = 0,
-      hi = pageOffsets.length - 1;
+    let lo = 0, hi = pageOffsets.length - 1;
     while (lo < hi) {
       const mid = (lo + hi + 1) >> 1;
       if (pageOffsets[mid] <= scrollTop) lo = mid;
@@ -296,8 +294,7 @@ export default function PageViewport() {
     }
     const firstVisible = lo;
 
-    lo = firstVisible;
-    hi = pageOffsets.length - 1;
+    lo = firstVisible; hi = pageOffsets.length - 1;
     while (lo < hi) {
       const mid = (lo + hi + 1) >> 1;
       if (pageOffsets[mid] < viewBottom) lo = mid;
@@ -332,7 +329,6 @@ export default function PageViewport() {
               const pageNum = renderStart + idx;
               const ps = pageSizes[pageNum];
               const top = pageOffsets[pageNum];
-              // Pages in the visible viewport get priority=0, overscan pages get priority=1
               const isVisible = pageNum >= visibleStart && pageNum <= visibleEnd;
               const priority: 0 | 1 = isVisible ? 0 : 1;
               return (
