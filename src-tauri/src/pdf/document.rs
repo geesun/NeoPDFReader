@@ -95,30 +95,6 @@ impl PdfDocument {
     pub fn page_count(&self) -> usize {
         self.metadata.page_count
     }
-
-    /// Get PDF outline/bookmarks by opening a fresh Document on this thread.
-    pub fn get_outline(&self) -> Result<Vec<OutlineItem>, String> {
-        let path = self.file_path.to_str().unwrap_or("");
-        let doc = Document::open(path)
-            .map_err(|e| format!("Failed to open document for outline: {}", e))?;
-
-        let outline = doc
-            .outlines()
-            .map_err(|e| format!("Failed to get outline: {}", e))?;
-
-        fn convert_outline(items: &[mupdf::Outline]) -> Vec<OutlineItem> {
-            items
-                .iter()
-                .map(|item| OutlineItem {
-                    title: item.title.clone(),
-                    page: item.dest.map(|d| d.loc.page_number as i32).unwrap_or(-1),
-                    children: convert_outline(&item.down),
-                })
-                .collect()
-        }
-
-        Ok(convert_outline(&outline))
-    }
 }
 
 // PdfDocument is Send + Sync: it contains no mupdf handles, only plain Rust

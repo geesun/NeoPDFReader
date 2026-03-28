@@ -45,13 +45,11 @@
   font-size: 13px;
 }
 
-/* Thumbnails */
-.thumbnail-panel {
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
+/* Thumbnails — virtual scroll container */
+.thumbnail-panel-scroll {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .thumbnail-item {
@@ -60,6 +58,7 @@
   border: 2px solid transparent;
   border-radius: 3px;
   padding: 4px;
+  width: 158px; /* 150px image + 4px padding × 2 */
 }
 
 .thumbnail-item:hover {

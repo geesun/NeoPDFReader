@@ -1,68 +1,111 @@
 use mupdf::{Colorspace, Document, ImageFormat, Matrix};
-use std::sync::mpsc::{self, SyncSender};
+use std::sync::{Arc, Condvar, Mutex};
+use std::collections::BinaryHeap;
+use std::cmp::Reverse;
 use tokio::sync::oneshot;
+
+/// Priority levels — lower number = higher priority.
+/// Workers always pick the task with the lowest priority number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RenderPriority {
+    /// Currently visible pages — render immediately
+    Visible = 0,
+    /// Overscan pages (±3 around visible) — render next
+    Prefetch = 1,
+    /// Sidebar thumbnails — render last
+    Thumbnail = 2,
+}
 
 /// A render request sent to a worker thread.
 struct RenderTask {
+    priority: RenderPriority,
+    /// Monotonically increasing sequence number for FIFO ordering within same priority.
+    seq: u64,
     file_path: String,
     page_num: usize,
     scale: f32,
     rotation: i32,
-    thumbnail_max_width: Option<u32>, // Some(w) = thumbnail, None = full render
+    thumbnail_max_width: Option<u32>,
     reply: oneshot::Sender<Result<Vec<u8>, String>>,
 }
 
-/// Pool of permanent render worker threads.
-/// Each thread owns its Document cache (a plain local variable, not TLS),
-/// so there is no TLS-destruction-order problem on thread exit — these
-/// threads never exit.
+// BinaryHeap is a max-heap; we want min-heap on (priority, seq).
+impl PartialEq for RenderTask {
+    fn eq(&self, other: &Self) -> bool {
+        (self.priority, self.seq) == (other.priority, other.seq)
+    }
+}
+impl Eq for RenderTask {}
+impl PartialOrd for RenderTask {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for RenderTask {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Reverse so BinaryHeap gives us the *lowest* (priority, seq) first.
+        Reverse((self.priority, self.seq)).cmp(&Reverse((other.priority, other.seq)))
+    }
+}
+
+struct SharedQueue {
+    heap: Mutex<(BinaryHeap<RenderTask>, u64, bool)>, // (tasks, next_seq, shutdown)
+    condvar: Condvar,
+}
+
+/// Pool of permanent render worker threads with a priority queue.
+/// Visible-page renders always preempt overscan and thumbnail renders.
 pub struct RenderPool {
-    tx: SyncSender<RenderTask>,
+    queue: Arc<SharedQueue>,
 }
 
 impl RenderPool {
-    /// Spawn `num_threads` permanent worker threads.
     pub fn new(num_threads: usize) -> Self {
-        // Bounded channel: limit queued tasks to avoid unbounded memory use
-        let (tx, rx) = mpsc::sync_channel::<RenderTask>(num_threads * 4);
-        let rx = std::sync::Arc::new(std::sync::Mutex::new(rx));
+        let queue = Arc::new(SharedQueue {
+            heap: Mutex::new((BinaryHeap::new(), 0, false)),
+            condvar: Condvar::new(),
+        });
 
         for _ in 0..num_threads {
-            let rx = rx.clone();
+            let q = queue.clone();
             std::thread::spawn(move || {
-                // Per-thread document cache: (file_path, Document).
-                // Stored as a plain local — never goes through TLS destruction.
                 let mut cached: Option<(String, Document)> = None;
 
                 loop {
-                    let task: RenderTask = match rx.lock().unwrap().recv() {
-                        Ok(t) => t,
-                        Err(_) => break, // sender dropped, exit
+                    // Wait for a task
+                    let task = {
+                        let mut guard = q.heap.lock().unwrap();
+                        loop {
+                            if let Some(t) = guard.0.pop() {
+                                break t;
+                            }
+                            if guard.2 {
+                                return; // shutdown
+                            }
+                            guard = q.condvar.wait(guard).unwrap();
+                        }
                     };
 
-                    // Evict cache if file changed
+                    // Evict per-thread doc cache if file changed
                     if let Some((ref path, _)) = cached {
                         if *path != task.file_path {
                             cached = None;
                         }
                     }
 
-                    // Open document if not cached
                     if cached.is_none() {
-                        eprintln!("[render_pool] opening document: {}", task.file_path);
                         match Document::open(&task.file_path) {
-                            Ok(doc) => {
-                                eprintln!("[render_pool] document opened ok");
-                                cached = Some((task.file_path.clone(), doc))
-                            },
+                            Ok(doc) => cached = Some((task.file_path.clone(), doc)),
                             Err(e) => {
-                                eprintln!("[render_pool] FAILED to open document: {}", e);
-                                let _ = task.reply.send(Err(format!(
-                                    "Failed to open document: {}", e
-                                )));
+                                let _ = task.reply.send(Err(format!("Failed to open document: {}", e)));
                                 continue;
                             }
                         }
+                    }
+
+                    // If the reply channel is already closed (caller cancelled), skip render.
+                    if task.reply.is_closed() {
+                        continue;
                     }
 
                     let doc = &cached.as_ref().unwrap().1;
@@ -77,59 +120,77 @@ impl RenderPool {
             });
         }
 
-        RenderPool { tx }
+        RenderPool { queue }
     }
 
-    /// Submit a page render request, await result asynchronously.
-    pub async fn render(
+    fn enqueue(
+        &self,
+        priority: RenderPriority,
+        file_path: String,
+        page_num: usize,
+        scale: f32,
+        rotation: i32,
+        thumbnail_max_width: Option<u32>,
+    ) -> tokio::sync::oneshot::Receiver<Result<Vec<u8>, String>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let mut guard = self.queue.heap.lock().unwrap();
+        let seq = guard.1;
+        guard.1 += 1;
+        guard.0.push(RenderTask {
+            priority,
+            seq,
+            file_path,
+            page_num,
+            scale,
+            rotation,
+            thumbnail_max_width,
+            reply: reply_tx,
+        });
+        drop(guard);
+        self.queue.condvar.notify_one();
+        reply_rx
+    }
+
+    /// Submit a visible-page render (highest priority).
+    pub async fn render_visible(
         &self,
         file_path: String,
         page_num: usize,
         scale: f32,
         rotation: i32,
     ) -> Result<Vec<u8>, String> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.tx
-            .send(RenderTask {
-                file_path,
-                page_num,
-                scale,
-                rotation,
-                thumbnail_max_width: None,
-                reply: reply_tx,
-            })
-            .map_err(|_| "Render pool is shut down".to_string())?;
-        reply_rx
+        self.enqueue(RenderPriority::Visible, file_path, page_num, scale, rotation, None)
             .await
             .map_err(|_| "Render worker dropped reply".to_string())?
     }
 
-    /// Submit a thumbnail render request, await result asynchronously.
+    /// Submit a prefetch render (overscan pages, medium priority).
+    pub async fn render_prefetch(
+        &self,
+        file_path: String,
+        page_num: usize,
+        scale: f32,
+        rotation: i32,
+    ) -> Result<Vec<u8>, String> {
+        self.enqueue(RenderPriority::Prefetch, file_path, page_num, scale, rotation, None)
+            .await
+            .map_err(|_| "Render worker dropped reply".to_string())?
+    }
+
+    /// Submit a thumbnail render (lowest priority).
     pub async fn thumbnail(
         &self,
         file_path: String,
         page_num: usize,
         max_width: u32,
     ) -> Result<Vec<u8>, String> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.tx
-            .send(RenderTask {
-                file_path,
-                page_num,
-                scale: 1.0,
-                rotation: 0,
-                thumbnail_max_width: Some(max_width),
-                reply: reply_tx,
-            })
-            .map_err(|_| "Render pool is shut down".to_string())?;
-        reply_rx
+        self.enqueue(RenderPriority::Thumbnail, file_path, page_num, 1.0, 0, Some(max_width))
             .await
             .map_err(|_| "Render worker dropped reply".to_string())?
     }
 }
 
-// RenderPool is Send+Sync: the SyncSender is Send+Sync, and the worker
-// threads handle all mupdf access internally on their own threads.
+// RenderPool is Send+Sync: Arc<SharedQueue> is Send+Sync; workers own all mupdf handles.
 unsafe impl Send for RenderPool {}
 unsafe impl Sync for RenderPool {}
 
@@ -141,7 +202,6 @@ fn render_page_inner(
     scale: f32,
     rotation: i32,
 ) -> Result<Vec<u8>, String> {
-    eprintln!("[render] page={} scale={} rotation={}", page_num, scale, rotation);
     let page = doc
         .load_page(page_num as i32)
         .map_err(|e| format!("Failed to load page {}: {}", page_num, e))?;
@@ -151,7 +211,6 @@ fn render_page_inner(
         matrix.concat(Matrix::new_rotate(rotation as f32));
     }
 
-    // alpha=false → white background, no transparency artifacts
     let pixmap = page
         .to_pixmap(&matrix, &Colorspace::device_rgb(), false, true)
         .map_err(|e| format!("Failed to render page {}: {}", page_num, e))?;
@@ -161,7 +220,6 @@ fn render_page_inner(
         .write_to(&mut png_buf, ImageFormat::PNG)
         .map_err(|e| format!("Failed to encode page {} to PNG: {}", page_num, e))?;
 
-    eprintln!("[render] page={} done, {} bytes", page_num, png_buf.len());
     Ok(png_buf)
 }
 
@@ -193,5 +251,3 @@ fn render_thumbnail_inner(
 
     Ok(png_buf)
 }
-
-

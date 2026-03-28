@@ -1,57 +1,48 @@
-import { useEffect, useState, useCallback } from "react";
-import { getThumbnail, getOutline, bytesToBlobUrl } from "../../services/tauriApi";
+import { useEffect, useState, useCallback, useRef, useMemo, memo } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { getOutline, bytesToBlobUrl } from "../../services/tauriApi";
 import { useDocumentStore } from "../../store/documentStore";
 import { useSearchStore } from "../../store/searchStore";
 import { useViewStore } from "../../store/viewStore";
 import type { OutlineItem } from "../../types";
 import "./Sidebar.css";
 
-function ThumbnailItem({ pageNum }: { pageNum: number }) {
-  const [src, setSrc] = useState<string | null>(null);
-  const [visible, setVisible] = useState(false);
-  const { currentPage, setCurrentPage } = useDocumentStore();
+// ─── Thumbnail virtual scroll ─────────────────────────────────────────────────
 
-  // Lazy load: only fetch when visible
+// Fixed item dimensions (must match CSS)
+const THUMB_ITEM_HEIGHT = 244; // placeholder(200) + label(20) + padding(8) + gap(8)*2 ≈ 244
+const THUMB_OVERSCAN = 3;
+
+const ThumbnailItem = memo(function ThumbnailItem({
+  pageNum,
+  isActive,
+  onSelect,
+}: {
+  pageNum: number;
+  isActive: boolean;
+  onSelect: (p: number) => void;
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+  const loadedRef = useRef(false);
+
+  // Fetch thumbnail once on mount (items are only mounted when visible).
   useEffect(() => {
-    if (!visible) return;
+    if (loadedRef.current) return;
+    loadedRef.current = true;
     let cancelled = false;
-    getThumbnail(pageNum)
-      .then((bytes) => {
+    invoke<ArrayBuffer>("get_thumbnail", { pageNum })
+      .then((buf) => {
         if (cancelled) return;
-        setSrc(bytesToBlobUrl(bytes));
+        setSrc(bytesToBlobUrl(buf));
       })
       .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [pageNum, visible]);
-
-  // IntersectionObserver for lazy loading
-  const refCallback = useCallback(
-    (node: HTMLDivElement | null) => {
-      if (!node) return;
-      const observer = new IntersectionObserver(
-        ([entry]) => {
-          if (entry.isIntersecting) {
-            setVisible(true);
-            observer.disconnect();
-          }
-        },
-        { threshold: 0.1 }
-      );
-      observer.observe(node);
-    },
-    []
-  );
+    return () => { cancelled = true; };
+  }, [pageNum]);
 
   return (
     <div
-      ref={refCallback}
-      className={`thumbnail-item ${pageNum === currentPage ? "active" : ""}`}
-      onClick={() => {
-        setCurrentPage(pageNum);
-        (window as any).__scrollToPage?.(pageNum);
-      }}
+      className={`thumbnail-item ${isActive ? "active" : ""}`}
+      onClick={() => onSelect(pageNum)}
     >
       {src ? (
         <img src={src} alt={`Page ${pageNum + 1}`} draggable={false} />
@@ -61,16 +52,87 @@ function ThumbnailItem({ pageNum }: { pageNum: number }) {
       <span className="thumbnail-label">{pageNum + 1}</span>
     </div>
   );
-}
+});
 
 function ThumbnailPanel() {
-  const { pageCount } = useDocumentStore();
+  const { pageCount, currentPage, setCurrentPage } = useDocumentStore();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [containerHeight, setContainerHeight] = useState(600);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      setContainerHeight(entries[0].contentRect.height);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const rafRef = useRef<number | null>(null);
+  const handleScroll = useCallback(() => {
+    if (rafRef.current !== null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      if (containerRef.current) setScrollTop(containerRef.current.scrollTop);
+    });
+  }, []);
+
+  const totalHeight = pageCount * THUMB_ITEM_HEIGHT;
+
+  const { renderStart, renderEnd } = useMemo(() => {
+    const first = Math.floor(scrollTop / THUMB_ITEM_HEIGHT);
+    const last = Math.min(
+      pageCount - 1,
+      Math.floor((scrollTop + containerHeight) / THUMB_ITEM_HEIGHT)
+    );
+    return {
+      renderStart: Math.max(0, first - THUMB_OVERSCAN),
+      renderEnd: Math.min(pageCount - 1, last + THUMB_OVERSCAN),
+    };
+  }, [scrollTop, containerHeight, pageCount]);
+
+  const handleSelect = useCallback(
+    (p: number) => {
+      setCurrentPage(p);
+      (window as any).__scrollToPage?.(p);
+    },
+    [setCurrentPage]
+  );
 
   return (
-    <div className="thumbnail-panel">
-      {Array.from({ length: pageCount }, (_, i) => (
-        <ThumbnailItem key={i} pageNum={i} />
-      ))}
+    <div
+      ref={containerRef}
+      className="thumbnail-panel-scroll"
+      onScroll={handleScroll}
+    >
+      <div style={{ height: totalHeight, position: "relative" }}>
+        {pageCount > 0 &&
+          renderEnd >= renderStart &&
+          Array.from({ length: renderEnd - renderStart + 1 }, (_, idx) => {
+            const pageNum = renderStart + idx;
+            return (
+              <div
+                key={pageNum}
+                style={{
+                  position: "absolute",
+                  top: pageNum * THUMB_ITEM_HEIGHT,
+                  left: 0,
+                  right: 0,
+                  display: "flex",
+                  justifyContent: "center",
+                }}
+              >
+                <ThumbnailItem
+                  pageNum={pageNum}
+                  isActive={pageNum === currentPage}
+                  onSelect={handleSelect}
+                />
+              </div>
+            );
+          })}
+      </div>
     </div>
   );
 }

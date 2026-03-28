@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { renderPage, bytesToBlobUrl } from "../../services/tauriApi";
+import { useCallback, useEffect, useMemo, useRef, useState, memo } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { bytesToBlobUrl } from "../../services/tauriApi";
 import { useDocumentStore } from "../../store/documentStore";
 import { useSearchStore } from "../../store/searchStore";
 import "./PageViewport.css";
+
+// ─── PageCanvas ───────────────────────────────────────────────────────────────
 
 interface PageCanvasProps {
   pageNum: number;
@@ -11,37 +14,85 @@ interface PageCanvasProps {
   scale: number;
   rotation: number;
   documentId: number;
+  /** 0 = visible (highest), 1 = prefetch, 2 = thumbnail */
+  priority: 0 | 1 | 2;
 }
 
-function PageCanvas({ pageNum, width, height, scale, rotation, documentId }: PageCanvasProps) {
+// Highlights are split into a separate component so search-result navigation
+// only re-renders the highlight overlay, not the image.
+const PageHighlights = memo(function PageHighlights({
+  pageNum,
+  scale,
+}: {
+  pageNum: number;
+  scale: number;
+}) {
+  const results = useSearchStore((s) => s.results);
+  const currentResultIndex = useSearchStore((s) => s.currentResultIndex);
+
+  const pageHighlights = useMemo(
+    () => results.filter((r) => r.page_num === pageNum),
+    [results, pageNum]
+  );
+
+  if (pageHighlights.length === 0) return null;
+
+  const isCurrentResultPage =
+    currentResultIndex >= 0 && results[currentResultIndex]?.page_num === pageNum;
+
+  return (
+    <div className="highlight-overlay">
+      {pageHighlights.map((result, ri) =>
+        result.highlights.map((hl, hi) => (
+          <div
+            key={`${ri}-${hi}`}
+            className={`search-highlight ${isCurrentResultPage ? "current" : ""}`}
+            style={{
+              left: hl.x * scale,
+              top: hl.y * scale,
+              width: hl.width * scale,
+              height: hl.height * scale,
+            }}
+          />
+        ))
+      )}
+    </div>
+  );
+});
+
+const PageCanvas = memo(function PageCanvas({
+  pageNum,
+  width,
+  height,
+  scale,
+  rotation,
+  documentId,
+  priority,
+}: PageCanvasProps) {
   const [imgSrc, setImgSrc] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const imgRef = useRef<HTMLImageElement>(null);
   const prevBlobUrl = useRef<string | null>(null);
 
   const displayWidth = width * scale;
   const displayHeight = height * scale;
-
-  const results = useSearchStore((s) => s.results);
-  const currentResultIndex = useSearchStore((s) => s.currentResultIndex);
-
-  const pageHighlights = results.filter((r) => r.page_num === pageNum);
-  const isCurrentResultPage =
-    currentResultIndex >= 0 &&
-    results[currentResultIndex]?.page_num === pageNum;
 
   useEffect(() => {
     let cancelled = false;
 
     setLoading(true);
     setImgSrc(null);
-    renderPage(pageNum, scale, rotation)
-      .then((bytes) => {
+
+    // Use invoke directly so we can pass `priority` and receive ArrayBuffer.
+    invoke<ArrayBuffer>("render_page", {
+      pageNum,
+      scale,
+      rotation,
+      priority,
+    })
+      .then((buf) => {
         if (cancelled) return;
-        if (prevBlobUrl.current) {
-          URL.revokeObjectURL(prevBlobUrl.current);
-        }
-        const url = bytesToBlobUrl(bytes);
+        if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current);
+        const url = bytesToBlobUrl(buf);
         prevBlobUrl.current = url;
         setImgSrc(url);
         setLoading(false);
@@ -55,15 +106,14 @@ function PageCanvas({ pageNum, width, height, scale, rotation, documentId }: Pag
     return () => {
       cancelled = true;
     };
-  }, [pageNum, scale, rotation, documentId]);
+  }, [pageNum, scale, rotation, documentId, priority]);
 
-  useEffect(() => {
-    return () => {
-      if (prevBlobUrl.current) {
-        URL.revokeObjectURL(prevBlobUrl.current);
-      }
-    };
-  }, []);
+  useEffect(
+    () => () => {
+      if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current);
+    },
+    []
+  );
 
   return (
     <div
@@ -77,46 +127,41 @@ function PageCanvas({ pageNum, width, height, scale, rotation, documentId }: Pag
       )}
       {imgSrc && (
         <img
-          ref={imgRef}
           src={imgSrc}
           alt={`Page ${pageNum + 1}`}
           style={{ width: "100%", height: "100%", display: "block" }}
           draggable={false}
         />
       )}
-      {pageHighlights.length > 0 && (
-        <div className="highlight-overlay">
-          {pageHighlights.map((result, ri) =>
-            result.highlights.map((hl, hi) => (
-              <div
-                key={`${ri}-${hi}`}
-                className={`search-highlight ${isCurrentResultPage ? "current" : ""}`}
-                style={{
-                  left: hl.x * scale,
-                  top: hl.y * scale,
-                  width: hl.width * scale,
-                  height: hl.height * scale,
-                }}
-              />
-            ))
-          )}
-        </div>
-      )}
+      <PageHighlights pageNum={pageNum} scale={scale} />
       <div className="page-number-label">{pageNum + 1}</div>
     </div>
   );
-}
+});
+
+// ─── PageViewport ─────────────────────────────────────────────────────────────
 
 export default function PageViewport() {
-  const { isOpen, pageSizes, pageCount, scale, rotation, currentPage, setCurrentPage, documentId } =
-    useDocumentStore();
+  const {
+    isOpen,
+    pageSizes,
+    pageCount,
+    scale,
+    rotation,
+    currentPage,
+    setCurrentPage,
+    documentId,
+  } = useDocumentStore();
 
-  // containerRef is ALWAYS attached to the same outermost div — never conditionally.
+  // containerRef is ALWAYS attached to the same outermost div.
   const containerRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(800);
 
-  // Observe container resize (for viewportHeight)
+  // Track the latest raf handle so we can cancel if needed
+  const rafRef = useRef<number | null>(null);
+
+  // Observe container resize
   useEffect(() => {
     if (!containerRef.current) return;
     const observer = new ResizeObserver((entries) => {
@@ -126,9 +171,9 @@ export default function PageViewport() {
     });
     observer.observe(containerRef.current);
     return () => observer.disconnect();
-  }, []); // run once — containerRef.current is stable
+  }, []);
 
-  // Reset scroll to top on new document
+  // Reset scroll on new document
   useEffect(() => {
     if (containerRef.current) {
       containerRef.current.scrollTop = 0;
@@ -138,7 +183,7 @@ export default function PageViewport() {
 
   const gap = 12;
 
-  // Pre-compute cumulative page offsets: pageOffsets[i] = top of page i in the scroll container.
+  // Pre-compute cumulative page offsets
   const { pageOffsets, totalHeight } = useMemo(() => {
     const offsets: number[] = [];
     let y = 0;
@@ -147,22 +192,28 @@ export default function PageViewport() {
       y += ps.height * scale + gap;
     }
     return { pageOffsets: offsets, totalHeight: y };
-  }, [pageSizes, scale, gap]);
+  }, [pageSizes, scale]);
 
+  // Throttle scroll handler with requestAnimationFrame to avoid 60 React
+  // state updates per second.
   const handleScroll = useCallback(() => {
-    if (!containerRef.current) return;
-    const st = containerRef.current.scrollTop;
-    setScrollTop(st);
+    if (rafRef.current !== null) return; // already scheduled
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      if (!containerRef.current) return;
+      const st = containerRef.current.scrollTop;
+      setScrollTop(st);
 
-    // Update currentPage using binary search on pageOffsets
-    if (pageOffsets.length === 0) return;
-    let lo = 0, hi = pageOffsets.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1;
-      if (pageOffsets[mid] <= st) lo = mid;
-      else hi = mid - 1;
-    }
-    if (lo !== currentPage) setCurrentPage(lo);
+      if (pageOffsets.length === 0) return;
+      let lo = 0,
+        hi = pageOffsets.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (pageOffsets[mid] <= st) lo = mid;
+        else hi = mid - 1;
+      }
+      if (lo !== currentPage) setCurrentPage(lo);
+    });
   }, [pageOffsets, currentPage, setCurrentPage]);
 
   const scrollToPage = useCallback(
@@ -176,7 +227,9 @@ export default function PageViewport() {
 
   useEffect(() => {
     (window as any).__scrollToPage = scrollToPage;
-    return () => { delete (window as any).__scrollToPage; };
+    return () => {
+      delete (window as any).__scrollToPage;
+    };
   }, [scrollToPage]);
 
   useEffect(() => {
@@ -206,13 +259,16 @@ export default function PageViewport() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, currentPage, pageCount, scrollToPage]);
 
-  // Compute visible page range using binary search on pageOffsets
-  const { renderStart, renderEnd } = useMemo(() => {
-    if (pageOffsets.length === 0) return { renderStart: 0, renderEnd: -1 };
-    const overscan = 3;
+  // Compute visible + overscan page range using binary search.
+  const { visibleStart, visibleEnd, renderStart, renderEnd } = useMemo(() => {
+    if (pageOffsets.length === 0)
+      return { visibleStart: 0, visibleEnd: -1, renderStart: 0, renderEnd: -1 };
 
-    // First page whose bottom edge is visible: find last page where pageOffsets[i] < scrollTop
-    let lo = 0, hi = pageOffsets.length - 1;
+    const overscan = 3;
+    const viewBottom = scrollTop + viewportHeight;
+
+    let lo = 0,
+      hi = pageOffsets.length - 1;
     while (lo < hi) {
       const mid = (lo + hi + 1) >> 1;
       if (pageOffsets[mid] <= scrollTop) lo = mid;
@@ -220,8 +276,6 @@ export default function PageViewport() {
     }
     const firstVisible = lo;
 
-    // Last page whose top edge is within viewport bottom
-    const viewBottom = scrollTop + viewportHeight;
     lo = firstVisible;
     hi = pageOffsets.length - 1;
     while (lo < hi) {
@@ -232,13 +286,14 @@ export default function PageViewport() {
     const lastVisible = lo;
 
     return {
+      visibleStart: firstVisible,
+      visibleEnd: lastVisible,
       renderStart: Math.max(0, firstVisible - overscan),
       renderEnd: Math.min(pageOffsets.length - 1, lastVisible + overscan),
     };
   }, [pageOffsets, scrollTop, viewportHeight]);
 
   return (
-    // This single div is ALWAYS the ref target — never returned conditionally.
     <div
       ref={containerRef}
       className={`page-viewport${!isOpen ? " empty" : ""}`}
@@ -251,14 +306,15 @@ export default function PageViewport() {
           <p className="shortcut-hint">Ctrl+O to open file</p>
         </div>
       ) : (
-        // Absolute-position virtual scroll: totalHeight sets the real scrollbar size.
-        // Each page block is absolutely positioned at its true offset — no translateY.
         <div className="page-scroll-container" style={{ height: totalHeight }}>
           {renderEnd >= renderStart &&
             Array.from({ length: renderEnd - renderStart + 1 }, (_, idx) => {
               const pageNum = renderStart + idx;
               const ps = pageSizes[pageNum];
               const top = pageOffsets[pageNum];
+              // Pages in the visible viewport get priority=0, overscan pages get priority=1
+              const isVisible = pageNum >= visibleStart && pageNum <= visibleEnd;
+              const priority: 0 | 1 = isVisible ? 0 : 1;
               return (
                 <div
                   key={`${documentId}-${pageNum}`}
@@ -272,6 +328,7 @@ export default function PageViewport() {
                     scale={scale}
                     rotation={rotation}
                     documentId={documentId}
+                    priority={priority}
                   />
                 </div>
               );

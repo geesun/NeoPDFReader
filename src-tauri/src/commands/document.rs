@@ -26,10 +26,15 @@ pub async fn open_pdf(
         return Err(format!("File not found: {}", path));
     }
 
-    // Open PDF document — reads metadata and page sizes only.
-    // The Document handle here is used only for the open() call; actual
-    // rendering/indexing uses per-thread Document instances.
-    let doc = PdfDocument::open(file_path)?;
+    // Open PDF document on a blocking thread — the page-size loop calls mupdf
+    // load_page/bounds for every page which is CPU-bound and must not block a
+    // tokio async worker.
+    let path_owned = path.clone();
+    let doc = tokio::task::spawn_blocking(move || {
+        PdfDocument::open(Path::new(&path_owned))
+    })
+    .await
+    .map_err(|e| format!("open task panicked: {}", e))??;
     let page_count = doc.page_count();
     let info = DocumentInfo {
         metadata: doc.metadata.clone(),
@@ -67,12 +72,35 @@ pub async fn open_pdf(
 }
 
 #[tauri::command]
-pub fn get_outline(
+pub async fn get_outline(
     state: State<'_, AppState>,
 ) -> Result<Vec<OutlineItem>, String> {
-    let doc = state.document.read();
-    let doc = doc.as_ref().ok_or("No document open")?;
-    doc.get_outline()
+    let file_path = {
+        let doc = state.document.read();
+        doc.as_ref()
+            .ok_or("No document open")?
+            .file_path
+            .to_string_lossy()
+            .to_string()
+    };
+    // Outline parsing opens a fresh mupdf Document — do it off the async thread.
+    tokio::task::spawn_blocking(move || {
+        use mupdf::Document;
+        let doc = Document::open(&file_path)
+            .map_err(|e| format!("Failed to open document for outline: {}", e))?;
+        let outline = doc.outlines()
+            .map_err(|e| format!("Failed to get outline: {}", e))?;
+        fn convert(items: &[mupdf::Outline]) -> Vec<OutlineItem> {
+            items.iter().map(|item| OutlineItem {
+                title: item.title.clone(),
+                page: item.dest.map(|d| d.loc.page_number as i32).unwrap_or(-1),
+                children: convert(&item.down),
+            }).collect()
+        }
+        Ok(convert(&outline))
+    })
+    .await
+    .map_err(|e| format!("outline task panicked: {}", e))?
 }
 
 #[tauri::command]
