@@ -31,6 +31,30 @@ function clearImageCacheForDoc(documentId: number) {
   cachedDocumentId = documentId;
 }
 
+/**
+ * Pre-inject a pre-rendered page image into the cache so PageCanvas shows it
+ * synchronously on first mount — no render_page IPC call needed.
+ *
+ * Called from App.tsx immediately after open_pdf returns, before setDocument,
+ * using the documentId that setDocument is *about* to assign (current + 1).
+ *
+ * scale=1.0, rotation=0 matches the default view state on open.
+ */
+export function injectPrerenderedPage(
+  documentId: number,
+  pageNum: number,
+  pngBase64: string,
+): void {
+  const key = makeImageKey(documentId, pageNum, 1.0, 0);
+  // If there's already an entry (e.g. user reopened same file), revoke old URL.
+  const existing = pageImageCache.get(key);
+  if (existing) URL.revokeObjectURL(existing);
+
+  const bytes = Uint8Array.from(atob(pngBase64), (c) => c.charCodeAt(0));
+  const blob = new Blob([bytes], { type: "image/png" });
+  pageImageCache.set(key, URL.createObjectURL(blob));
+}
+
 // ─── PageHighlights ───────────────────────────────────────────────────────────
 
 const PageHighlights = memo(function PageHighlights({

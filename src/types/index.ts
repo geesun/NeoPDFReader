@@ -21,6 +21,12 @@ export interface DocumentInfo {
   page_sizes: PageSize[];
   /** Last page the user was viewing when this file was previously closed. 0 = first open. */
   last_page: number;
+  /**
+   * Pre-rendered PNG of `last_page`, base64-encoded.
+   * Inject directly into pageImageCache so the page shows with zero extra IPC.
+   * null if pre-rendering failed (fallback: render_page will be called normally).
+   */
+  initial_page_png: string | null;
 }
 
 export interface OutlineItem {

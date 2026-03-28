@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { openPdf } from "./services/tauriApi";
 import { useDocumentStore } from "./store/documentStore";
 import { useSearchStore } from "./store/searchStore";
+import { injectPrerenderedPage } from "./components/PageViewport/PageViewport";
 import Toolbar from "./components/Toolbar";
 import SearchBar from "./components/SearchBar";
 import Sidebar from "./components/Sidebar";
@@ -57,6 +58,12 @@ function App() {
           if (selected) {
             const path = typeof selected === "string" ? selected : selected;
             const info = await openPdf(path as string);
+            // Inject the pre-rendered page into the cache BEFORE setDocument
+            // bumps documentId, using the id that setDocument is about to assign.
+            if (info.initial_page_png) {
+              const nextDocumentId = useDocumentStore.getState().documentId + 1;
+              injectPrerenderedPage(nextDocumentId, info.last_page, info.initial_page_png);
+            }
             setDocument(info, path as string);
           }
         } catch (err) {

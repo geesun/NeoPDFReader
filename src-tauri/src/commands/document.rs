@@ -20,6 +20,10 @@ pub struct DocumentInfo {
     /// Last page the user was on when this file was previously closed.
     /// 0 means the file has not been opened before (or was last seen at page 0).
     pub last_page: usize,
+    /// Pre-rendered PNG of `last_page` (base64-encoded), so the frontend can
+    /// display it immediately without a separate render_page IPC call.
+    /// None if pre-rendering failed (frontend falls back to render_page).
+    pub initial_page_png: Option<String>,
 }
 
 /// Emitted for every chunk of page sizes after the first batch.
@@ -46,36 +50,48 @@ pub async fn open_pdf(
     // thread so open_pdf can return and the frontend can start rendering the
     // visible pages immediately.
     //
-    // The remaining page sizes are streamed via "page-sizes-chunk" events from
-    // a background thread so virtual scrolling can build its full layout
-    // without blocking the initial render.
-    const EAGER_PAGES: usize = 16; // read immediately; covers any realistic initial viewport
+    // We also look up reading history *before* spawning so we can pass
+    // initial_page into open_partial and pre-render that page on the same
+    // thread — eliminating one full render_page IPC round-trip.
+    const EAGER_PAGES: usize = 16;
+
+    // Read history on the async thread (fast — tiny JSON file).
+    let last_page = match app_handle.path().app_data_dir() {
+        Ok(data_dir) => history::get_last_page(&data_dir, &path),
+        Err(_) => 0,
+    };
 
     let path_owned = path.clone();
-    let (doc, eager_sizes, page_count) = tokio::task::spawn_blocking(move || {
-        PdfDocument::open_partial(Path::new(&path_owned), EAGER_PAGES)
-    })
-    .await
-    .map_err(|e| format!("open task panicked: {}", e))??;
+    let (doc, eager_sizes, page_count, initial_page_png_bytes) =
+        tokio::task::spawn_blocking(move || {
+            PdfDocument::open_partial(Path::new(&path_owned), EAGER_PAGES, last_page)
+        })
+        .await
+        .map_err(|e| format!("open task panicked: {}", e))??;
 
-    // Look up the last page from persistent reading history.
-    let last_page = {
-        match app_handle.path().app_data_dir() {
-            Ok(data_dir) => history::get_last_page(&data_dir, &path),
-            Err(_) => 0,
-        }
-    };
+    // Encode the pre-rendered PNG as base64 for JSON transport.
+    let initial_page_png = initial_page_png_bytes.as_ref().map(|bytes| {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    });
 
     let info = DocumentInfo {
         metadata: doc.metadata.clone(),
         page_sizes: eager_sizes,
         last_page,
+        initial_page_png,
     };
 
     let doc = Arc::new(doc);
 
     // Clear old caches
     state.bitmap_cache.clear();
+
+    // Store the pre-rendered PNG in the bitmap cache so a subsequent
+    // render_page(last_page, scale=1.0, rotation=0) call returns instantly.
+    if let Some(png_bytes) = initial_page_png_bytes {
+        state.bitmap_cache.put(&path, last_page, 1.0, 0, png_bytes);
+    }
 
     // Create new search indexer
     let indexer = Arc::new(SearchIndexer::new(page_count)?);

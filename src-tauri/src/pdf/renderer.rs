@@ -229,7 +229,7 @@ impl RenderPool {
 unsafe impl Send for RenderPool {}
 unsafe impl Sync for RenderPool {}
 
-// ── Internal render helpers (called on worker threads only) ──────────────────
+// ── Internal render helpers ───────────────────────────────────────────────────
 
 fn render_page_inner(
     doc: &Document,
