@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef, useMemo, memo } from "react";
+
 import { invoke } from "@tauri-apps/api/core";
 import { getOutline, bytesToBlobUrl } from "../../services/tauriApi";
 import { useDocumentStore } from "../../store/documentStore";
@@ -15,20 +16,21 @@ const THUMB_OVERSCAN = 3;
 
 const ThumbnailItem = memo(function ThumbnailItem({
   pageNum,
+  documentId,
   isActive,
   onSelect,
 }: {
   pageNum: number;
+  documentId: number;
   isActive: boolean;
   onSelect: (p: number) => void;
 }) {
   const [src, setSrc] = useState<string | null>(null);
-  const loadedRef = useRef(false);
 
-  // Fetch thumbnail once on mount (items are only mounted when visible).
+  // Fetch thumbnail on mount (component is only mounted when visible).
+  // Key={documentId}-{pageNum} ensures full remount on document change,
+  // so this effect always fires for a new document.
   useEffect(() => {
-    if (loadedRef.current) return;
-    loadedRef.current = true;
     let cancelled = false;
     invoke<ArrayBuffer>("get_thumbnail", { pageNum })
       .then((buf) => {
@@ -37,7 +39,9 @@ const ThumbnailItem = memo(function ThumbnailItem({
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [pageNum]);
+  // documentId is included so that if React ever reuses this instance
+  // (e.g. during dev hot-reload), the fetch still re-fires.
+  }, [pageNum, documentId]);
 
   return (
     <div
@@ -55,7 +59,7 @@ const ThumbnailItem = memo(function ThumbnailItem({
 });
 
 function ThumbnailPanel() {
-  const { pageCount, currentPage, setCurrentPage } = useDocumentStore();
+  const { pageCount, currentPage, documentId, setCurrentPage } = useDocumentStore();
   const containerRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [containerHeight, setContainerHeight] = useState(600);
@@ -114,7 +118,7 @@ function ThumbnailPanel() {
             const pageNum = renderStart + idx;
             return (
               <div
-                key={pageNum}
+                key={`${documentId}-${pageNum}`}
                 style={{
                   position: "absolute",
                   top: pageNum * THUMB_ITEM_HEIGHT,
@@ -126,6 +130,7 @@ function ThumbnailPanel() {
               >
                 <ThumbnailItem
                   pageNum={pageNum}
+                  documentId={documentId}
                   isActive={pageNum === currentPage}
                   onSelect={handleSelect}
                 />

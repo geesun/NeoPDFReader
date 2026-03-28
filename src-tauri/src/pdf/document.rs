@@ -156,6 +156,18 @@ fn render_page_png(doc: &Document, page_num: usize) -> Result<Vec<u8>, String> {
     Ok(buf)
 }
 
+/// Convert mupdf outline items to our serializable OutlineItem type.
+pub fn convert_outline(items: &[mupdf::Outline]) -> Vec<OutlineItem> {
+    items
+        .iter()
+        .map(|item| OutlineItem {
+            title: item.title.clone(),
+            page: item.dest.map(|d| d.loc.page_number as i32).unwrap_or(-1),
+            children: convert_outline(&item.down),
+        })
+        .collect()
+}
+
 // PdfDocument is Send + Sync: it contains no mupdf handles, only plain Rust
 // data (PathBuf, Strings, Vecs) and i64/f32 values.
 unsafe impl Send for PdfDocument {}
