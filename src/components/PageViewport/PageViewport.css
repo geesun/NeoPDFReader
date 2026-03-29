@@ -110,48 +110,42 @@
   background: transparent;
 }
 
-/* ── Text layer (invisible selectable text overlay) ─────────────────────────── */
+/* ── Text layer (custom selection overlay) ──────────────────────────────────── */
 
 .text-layer {
   position: absolute;
   inset: 0;
-  /* Above link layer so text selection works */
+  /* Above link layer so custom selection receives mouse events */
   z-index: 3;
-  /* Allow native text selection */
-  user-select: text;
-  -webkit-user-select: text;
-  /* Let clicks fall through to links in gaps between text spans */
-  pointer-events: none;
+  /* No browser selection — we render our own highlight rectangles */
+  user-select: none;
+  -webkit-user-select: none;
+  /* Must receive mouse events for selection drag.  Link clicks underneath
+     are forwarded programmatically (see TextLayer onMouseDown/onMouseUp). */
+  pointer-events: auto;
+  cursor: text;
   overflow: hidden;
-  /* Preserve \n text nodes between spans so copy gets line breaks */
-  white-space: pre;
-  /* Ensure bare \n text nodes are invisible (zero font size in container) */
-  font-size: 0;
-  line-height: 0;
-  color: transparent;
 }
 
 .text-line-span {
   position: absolute;
-  /* Invisible text — browser can still select it */
+  /* Invisible text — kept for screen-readers / a11y only */
   color: transparent;
   white-space: pre;
-  /* Re-enable pointer events so the browser can track selection drags */
-  pointer-events: auto;
-  /* Prevent the span from being a block that shifts layout */
+  /* All mouse interaction is handled by the parent .text-layer */
+  pointer-events: none;
   display: block;
-  /* No padding/margin — pure bounding box positioning */
   margin: 0;
   padding: 0;
-  /* scaleX stretches from the left edge to match PDF glyph width */
   transform-origin: left top;
-  /* Use a common sans-serif stack — must match measureTextWidth() in JS */
+  /* Must match measureTextWidth() in JS */
   font-family: sans-serif;
 }
 
-/* When the user selects text, show the standard blue selection highlight.
-   The text itself stays transparent but ::selection background reveals it. */
-.text-line-span::selection {
+/* Custom selection highlight rectangle painted by TextLayer */
+.text-selection-hl {
+  position: absolute;
   background: rgba(0, 100, 255, 0.3);
-  color: transparent;
+  pointer-events: none;
+  border-radius: 1px;
 }

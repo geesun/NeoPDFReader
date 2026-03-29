@@ -236,14 +236,21 @@ const LinkLayer = memo(function LinkLayer({
 
 // ─── TextLayer ────────────────────────────────────────────────────────────────
 //
-// Invisible text overlay that enables native browser text selection.
-// Each line is a <span> with `color: transparent` positioned over the page
-// image. The browser's native selection "just works" — Cmd+C copies text.
+// Custom text selection overlay.  Browser native selection on absolute+
+// transformed spans is unreliable (whole-page highlight artefacts at line
+// boundaries), so we implement selection entirely ourselves:
 //
-// Key trick: after rendering, we measure each span's natural text width with
-// a shared off-screen canvas and apply `transform: scaleX(targetW / naturalW)`
-// so the transparent text exactly covers the PDF-rendered glyphs regardless of
-// which system font the browser substitutes.
+//   • mousedown/mousemove/mouseup track a selection range (lineIndex, charOffset)
+//   • We render our own semi-transparent blue highlight rectangles
+//   • Cmd+C / Ctrl+C writes the selected text to the clipboard
+//   • The text spans are `user-select: none` / `pointer-events: none`
+//
+// Pointer-events strategy:
+//   .text-layer has pointer-events: auto (receives all mouse events, z-index 3).
+//   .link-layer sits below at z-index 2.
+//   On a simple click (mousedown+mouseup with no/tiny drag) we use
+//   elementsFromPoint() to find a .page-link-area underneath and forward the
+//   click — so links still work despite text-layer being on top.
 
 /** Shared off-screen canvas context for measuring text width. Lazy-created. */
 let _measureCtx: CanvasRenderingContext2D | null = null;
@@ -255,13 +262,120 @@ function getMeasureCtx(): CanvasRenderingContext2D {
   return _measureCtx;
 }
 
-/** Measure the natural pixel width of `text` at the given `fontSize` (px).
- *  Uses the same font-family as `.text-line-span` in CSS. */
 function measureTextWidth(text: string, fontSize: number): number {
   const ctx = getMeasureCtx();
   ctx.font = `${fontSize}px sans-serif`;
   return ctx.measureText(text).width;
 }
+
+/** A caret position inside the text-line array. */
+type Caret = { line: number; ch: number };
+
+/** Hit-test a mouse position (relative to the text-layer div) to find the
+ *  closest caret in `lines`. */
+function hitTestCaret(
+  lines: TextLineInfo[],
+  scale: number,
+  localX: number,
+  localY: number,
+): Caret {
+  if (lines.length === 0) return { line: 0, ch: 0 };
+
+  // Find the closest line by vertical midpoint distance.
+  let bestLine = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < lines.length; i++) {
+    const ly = lines[i].y * scale;
+    const lh = lines[i].height * scale;
+    const mid = ly + lh / 2;
+    const d = Math.abs(localY - mid);
+    if (d < bestDist) {
+      bestDist = d;
+      bestLine = i;
+    }
+  }
+
+  const ln = lines[bestLine];
+  const lx = ln.x * scale;
+  const lw = ln.width * scale;
+
+  if (localX <= lx) return { line: bestLine, ch: 0 };
+  if (localX >= lx + lw) return { line: bestLine, ch: ln.text.length };
+
+  // Proportional offset within the line.
+  const ratio = (localX - lx) / lw;
+  const ch = Math.round(ratio * ln.text.length);
+  return { line: bestLine, ch: Math.max(0, Math.min(ch, ln.text.length)) };
+}
+
+/** Order two carets so start <= end. */
+function orderCarets(a: Caret, b: Caret): [Caret, Caret] {
+  if (a.line < b.line || (a.line === b.line && a.ch <= b.ch)) return [a, b];
+  return [b, a];
+}
+
+/** Build the selected plain-text from ordered start..end carets. */
+function buildSelectedText(
+  lines: TextLineInfo[],
+  start: Caret,
+  end: Caret,
+): string {
+  if (start.line === end.line) {
+    return lines[start.line].text.slice(start.ch, end.ch);
+  }
+
+  const parts: string[] = [];
+  // First line (tail)
+  parts.push(lines[start.line].text.slice(start.ch));
+  // Middle lines (full)
+  for (let i = start.line + 1; i < end.line; i++) {
+    const sep = lines[i - 1].is_last_in_block ? "\n" : " ";
+    parts.push(sep + lines[i].text);
+  }
+  // Last line (head)
+  const lastSep = lines[end.line - 1].is_last_in_block ? "\n" : " ";
+  parts.push(lastSep + lines[end.line].text.slice(0, end.ch));
+
+  return parts.join("");
+}
+
+/** Compute an array of highlight rectangles (in px, relative to text-layer)
+ *  for a selection from `start` to `end` (ordered). */
+function selectionRects(
+  lines: TextLineInfo[],
+  scale: number,
+  start: Caret,
+  end: Caret,
+): { left: number; top: number; width: number; height: number }[] {
+  const rects: { left: number; top: number; width: number; height: number }[] = [];
+  if (start.line === end.line && start.ch === end.ch) return rects;
+
+  for (let i = start.line; i <= end.line; i++) {
+    const ln = lines[i];
+    const lx = ln.x * scale;
+    const ly = ln.y * scale;
+    const lw = ln.width * scale;
+    const lh = ln.height * scale;
+    const len = ln.text.length || 1; // avoid /0
+
+    const chStart = i === start.line ? start.ch : 0;
+    const chEnd = i === end.line ? end.ch : ln.text.length;
+    if (chStart === chEnd) continue;
+
+    const x0 = lx + (chStart / len) * lw;
+    const x1 = lx + (chEnd / len) * lw;
+    rects.push({ left: x0, top: ly, width: x1 - x0, height: lh });
+  }
+  return rects;
+}
+
+// ── Global selection coordination ──
+// Only one TextLayer can have an active selection at a time. When a new
+// selection starts on page N, any existing selection on page M is cleared.
+let _activeSelectionClear: (() => void) | null = null;
+
+/** Minimum drag distance (px) to distinguish a click from a selection drag. */
+const CLICK_THRESHOLD = 4;
 
 const TextLayer = memo(function TextLayer({
   pageNum,
@@ -272,12 +386,35 @@ const TextLayer = memo(function TextLayer({
   pageNum: number;
   scale: number;
   documentId: number;
-  /** 0 = Visible (current page), 1 = Prefetch (overscan pages) */
   priority: 0 | 1;
 }) {
   const [lines, setLines] = useState<TextLineInfo[]>(() => {
     return pageTextCache.get(makeTextKey(documentId, pageNum)) ?? [];
   });
+  const layerRef = useRef<HTMLDivElement | null>(null);
+
+  // Selection state: anchor = mousedown position, focus = current drag position.
+  const [anchor, setAnchor] = useState<Caret | null>(null);
+  const [focus, setFocus] = useState<Caret | null>(null);
+
+  // Ref mirrors for event handlers that must not trigger re-subscriptions.
+  const linesRef = useRef(lines);
+  linesRef.current = lines;
+  const anchorRef = useRef(anchor);
+  anchorRef.current = anchor;
+  const focusRef = useRef(focus);
+  focusRef.current = focus;
+
+  // Track mousedown screen position to detect click-vs-drag.
+  const downPosRef = useRef<{ x: number; y: number } | null>(null);
+  // True while the mouse button is held down (dragging).
+  const isDraggingRef = useRef(false);
+
+  // Register a clear callback so other pages can clear our selection.
+  const clearSelection = useCallback(() => {
+    setAnchor(null);
+    setFocus(null);
+  }, []);
 
   useEffect(() => {
     const key = makeTextKey(documentId, pageNum);
@@ -297,40 +434,162 @@ const TextLayer = memo(function TextLayer({
     return () => { cancelled = true; };
   }, [pageNum, documentId, priority]);
 
+  // ── Mouse helpers ──
+  const localCoords = useCallback((e: MouseEvent | React.MouseEvent): { x: number; y: number } | null => {
+    const el = layerRef.current;
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }, []);
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    // Only handle left-button.
+    if (e.button !== 0) return;
+    const pos = localCoords(e);
+    if (!pos) return;
+
+    // Clear selection on any other TextLayer.
+    if (_activeSelectionClear && _activeSelectionClear !== clearSelection) {
+      _activeSelectionClear();
+    }
+    _activeSelectionClear = clearSelection;
+
+    const caret = hitTestCaret(linesRef.current, scale, pos.x, pos.y);
+    setAnchor(caret);
+    setFocus(caret);
+    downPosRef.current = { x: e.clientX, y: e.clientY };
+    isDraggingRef.current = true;
+    e.preventDefault(); // prevent browser native selection
+  }, [scale, localCoords, clearSelection]);
+
+  // Global mousemove / mouseup so dragging outside the layer still works.
+  useEffect(() => {
+    if (!anchor || !isDraggingRef.current) return;
+
+    const onMove = (e: MouseEvent) => {
+      const pos = localCoords(e);
+      if (!pos) return;
+      const caret = hitTestCaret(linesRef.current, scale, pos.x, pos.y);
+      setFocus(caret);
+    };
+
+    const onUp = (e: MouseEvent) => {
+      isDraggingRef.current = false;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+
+      // If the mouse barely moved, treat this as a click — forward to link.
+      const dp = downPosRef.current;
+      if (dp) {
+        const dx = e.clientX - dp.x;
+        const dy = e.clientY - dp.y;
+        if (Math.sqrt(dx * dx + dy * dy) < CLICK_THRESHOLD) {
+          // No real drag — clear selection and try to forward click to a link.
+          setAnchor(null);
+          setFocus(null);
+
+          // Temporarily hide the text-layer so elementsFromPoint can see links.
+          const el = layerRef.current;
+          if (el) {
+            const origPE = el.style.pointerEvents;
+            el.style.pointerEvents = "none";
+            const elements = document.elementsFromPoint(e.clientX, e.clientY);
+            el.style.pointerEvents = origPE;
+            for (const hit of elements) {
+              if (hit.classList.contains("page-link-area")) {
+                (hit as HTMLElement).click();
+                break;
+              }
+            }
+          }
+        }
+      }
+      downPosRef.current = null;
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [anchor, scale, localCoords]);
+
+  // ── Keyboard copy (Cmd+C / Ctrl+C) ──
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "c") {
+        const a = anchorRef.current;
+        const f = focusRef.current;
+        if (!a || !f) return;
+        const [s, en] = orderCarets(a, f);
+        if (s.line === en.line && s.ch === en.ch) return;
+        const text = buildSelectedText(linesRef.current, s, en);
+        if (!text) return;
+        e.preventDefault();
+        navigator.clipboard.writeText(text).catch(() => {});
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []); // no deps — reads from refs
+
+  // Cleanup global reference on unmount.
+  useEffect(() => {
+    return () => {
+      if (_activeSelectionClear === clearSelection) {
+        _activeSelectionClear = null;
+      }
+    };
+  }, [clearSelection]);
+
+  // ── Render ──
+  const highlights = useMemo(() => {
+    if (!anchor || !focus) return [];
+    const [s, e] = orderCarets(anchor, focus);
+    return selectionRects(lines, scale, s, e);
+  }, [anchor, focus, lines, scale]);
+
   if (lines.length === 0) return null;
 
   return (
-    <div className="text-layer">
+    <div
+      ref={layerRef}
+      className="text-layer"
+      onMouseDown={onMouseDown}
+    >
+      {/* Selection highlight rectangles */}
+      {highlights.map((r, i) => (
+        <div
+          key={`sel-${i}`}
+          className="text-selection-hl"
+          style={{ left: r.left, top: r.top, width: r.width, height: r.height }}
+        />
+      ))}
+      {/* Invisible text spans — for a11y / screen readers only */}
       {lines.map((line, i) => {
         const targetW = line.width * scale;
         const fontSize = line.height * scale;
         const naturalW = measureTextWidth(line.text, fontSize);
-        // scaleX ratio: stretch/compress the browser-rendered text to match
-        // the exact PDF glyph width. Clamp to avoid degenerate values.
         const sx = naturalW > 0 ? targetW / naturalW : 1;
 
         return (
-          <React.Fragment key={i}>
-            <span
-              className="text-line-span"
-              style={{
-                left: line.x * scale,
-                top: line.y * scale,
-                // Width must be the *target* width so the selection highlight
-                // covers the correct area. scaleX stretches the text to fill.
-                width: targetW,
-                height: line.height * scale,
-                fontSize,
-                lineHeight: `${line.height * scale}px`,
-                transform: `scaleX(${sx})`,
-              }}
-            >
-              {line.text}
-            </span>
-            {/* Last line in block (paragraph end) → real newline.
-                Mid-paragraph soft wrap → space, so copy joins them naturally. */}
-            {line.is_last_in_block ? "\n" : " "}
-          </React.Fragment>
+          <span
+            key={i}
+            className="text-line-span"
+            aria-hidden="false"
+            style={{
+              left: line.x * scale,
+              top: line.y * scale,
+              width: targetW,
+              height: line.height * scale,
+              fontSize,
+              lineHeight: `${line.height * scale}px`,
+              transform: `scaleX(${sx})`,
+            }}
+          >
+            {line.text}
+          </span>
         );
       })}
     </div>
