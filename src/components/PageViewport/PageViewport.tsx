@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, memo } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { bytesToBlobUrl } from "../../services/tauriApi";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { bytesToBlobUrl, getPageLinks } from "../../services/tauriApi";
 import { useDocumentStore } from "../../store/documentStore";
 import { useSearchStore } from "../../store/searchStore";
+import { useNavigationStore } from "../../store/navigationStore";
+import type { LinkInfo } from "../../types";
 import "./PageViewport.css";
 // ─── Front-end page image cache ───────────────────────────────────────────────
 //
@@ -97,6 +100,121 @@ const PageHighlights = memo(function PageHighlights({
   );
 });
 
+// ─── Link cache ───────────────────────────────────────────────────────────────
+//
+// Per-page link data fetched lazily and cached per-document.
+// Key: `${documentId}:${pageNum}`
+// Cleared when a new document is opened.
+
+const pageLinkCache = new Map<string, LinkInfo[]>();
+let linkCacheDocId = -1;
+
+function makeLinkKey(documentId: number, pageNum: number) {
+  return `${documentId}:${pageNum}`;
+}
+
+function clearLinkCache(documentId: number) {
+  if (linkCacheDocId === documentId) return;
+  pageLinkCache.clear();
+  linkCacheDocId = documentId;
+}
+
+/** Prefetch links for a page (e.g. jump target) so they're ready by the time
+ *  the user sees the page. Non-blocking, result goes into cache.
+ *  Uses Prefetch priority (1) since the user hasn't seen the page yet. */
+export function prefetchPageLinks(documentId: number, pageNum: number): void {
+  const key = makeLinkKey(documentId, pageNum);
+  if (pageLinkCache.has(key)) return;
+  getPageLinks(pageNum, 1 /* Prefetch */)
+    .then((links) => { pageLinkCache.set(key, links); })
+    .catch(() => {});
+}
+
+// ─── LinkLayer ────────────────────────────────────────────────────────────────
+
+const LinkLayer = memo(function LinkLayer({
+  pageNum,
+  scale,
+  documentId,
+  priority,
+}: {
+  pageNum: number;
+  scale: number;
+  documentId: number;
+  /** 0 = Visible (current page), 1 = Prefetch (overscan pages) */
+  priority: 0 | 1;
+}) {
+  const [links, setLinks] = useState<LinkInfo[]>(() => {
+    return pageLinkCache.get(makeLinkKey(documentId, pageNum)) ?? [];
+  });
+
+  const currentPage = useDocumentStore((s) => s.currentPage);
+  const setCurrentPage = useDocumentStore((s) => s.setCurrentPage);
+  const pushNavigation = useNavigationStore((s) => s.pushNavigation);
+
+  useEffect(() => {
+    const key = makeLinkKey(documentId, pageNum);
+    const cached = pageLinkCache.get(key);
+    if (cached) {
+      setLinks(cached);
+      return;
+    }
+    let cancelled = false;
+    getPageLinks(pageNum, priority)
+      .then((result) => {
+        if (cancelled) return;
+        pageLinkCache.set(key, result);
+        setLinks(result);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [pageNum, documentId, priority]);
+
+  const handleLinkClick = useCallback(
+    (link: LinkInfo, e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (link.dest_page >= 0) {
+        // Internal link — push navigation history and jump
+        pushNavigation(currentPage, link.dest_page);
+        setCurrentPage(link.dest_page);
+        // Prefetch links for the target page
+        prefetchPageLinks(documentId, link.dest_page);
+        (window as any).__scrollToPage?.(link.dest_page);
+      } else if (link.uri) {
+        // External link — open in system browser
+        openUrl(link.uri).catch((err: unknown) => {
+          console.error("Failed to open URL:", err);
+        });
+      }
+    },
+    [currentPage, setCurrentPage, pushNavigation, documentId]
+  );
+
+  if (links.length === 0) return null;
+
+  return (
+    <div className="link-layer">
+      {links.map((link, i) => (
+        <a
+          key={i}
+          className="page-link-area"
+          href={link.uri || "#"}
+          title={link.dest_page >= 0 ? `Go to page ${link.dest_page + 1}` : link.uri}
+          onClick={(e) => handleLinkClick(link, e)}
+          style={{
+            left: link.x * scale,
+            top: link.y * scale,
+            width: link.width * scale,
+            height: link.height * scale,
+          }}
+        />
+      ))}
+    </div>
+  );
+});
+
 // ─── PageCanvas ───────────────────────────────────────────────────────────────
 
 interface PageCanvasProps {
@@ -183,6 +301,7 @@ const PageCanvas = memo(function PageCanvas({
       )}
       {/* No spinner — white background shows while rendering, image fades in naturally */}
       <PageHighlights pageNum={pageNum} scale={scale} />
+      <LinkLayer pageNum={pageNum} scale={scale} documentId={documentId} priority={priority} />
 
     </div>
   );
@@ -209,6 +328,15 @@ export default function PageViewport() {
 
   // Clear the front-end image cache whenever a new document is opened.
   clearImageCacheForDoc(documentId);
+  clearLinkCache(documentId);
+
+  // Clear navigation history when a new document is opened.
+  const clearHistory = useNavigationStore((s) => s.clearHistory);
+  const prevDocIdRef = useRef(documentId);
+  if (prevDocIdRef.current !== documentId) {
+    prevDocIdRef.current = documentId;
+    clearHistory();
+  }
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -313,10 +441,36 @@ export default function PageViewport() {
     return () => { delete (window as any).__scrollToPage; };
   }, [scrollToPage]);
 
+  const { goBack, goForward } = useNavigationStore();
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!isOpen) return;
       if ((e.target as HTMLElement).tagName === "INPUT") return;
+
+      // Cmd+Left (macOS) or Alt+Left → go back
+      if ((e.metaKey || e.altKey) && e.key === "ArrowLeft") {
+        e.preventDefault();
+        const target = goBack(currentPage);
+        if (target != null) {
+          setCurrentPage(target);
+          prefetchPageLinks(documentId, target);
+          scrollToPage(target);
+        }
+        return;
+      }
+      // Cmd+Right (macOS) or Alt+Right → go forward
+      if ((e.metaKey || e.altKey) && e.key === "ArrowRight") {
+        e.preventDefault();
+        const target = goForward(currentPage);
+        if (target != null) {
+          setCurrentPage(target);
+          prefetchPageLinks(documentId, target);
+          scrollToPage(target);
+        }
+        return;
+      }
+
       switch (e.key) {
         case "PageDown": e.preventDefault(); scrollToPage(Math.min(currentPage + 1, pageCount - 1)); break;
         case "PageUp":   e.preventDefault(); scrollToPage(Math.max(currentPage - 1, 0)); break;
@@ -326,7 +480,7 @@ export default function PageViewport() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [isOpen, currentPage, pageCount, scrollToPage]);
+  }, [isOpen, currentPage, pageCount, scrollToPage, documentId, setCurrentPage, goBack, goForward]);
 
   // Compute visible + overscan range
   const { visibleStart, visibleEnd, renderStart, renderEnd } = useMemo(() => {

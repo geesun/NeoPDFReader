@@ -68,3 +68,15 @@ export interface IndexStatus {
 }
 
 export type ViewMode = "single" | "continuous";
+
+export interface LinkInfo {
+  /** Bounding rect in PDF points (unscaled) */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** 0-based target page for internal links; -1 for external links */
+  dest_page: number;
+  /** Raw URI — full URL for external links */
+  uri: string;
+}

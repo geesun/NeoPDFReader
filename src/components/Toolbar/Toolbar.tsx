@@ -4,6 +4,8 @@ import { openPdf } from "../../services/tauriApi";
 import { useDocumentStore } from "../../store/documentStore";
 import { useSearchStore } from "../../store/searchStore";
 import { useViewStore } from "../../store/viewStore";
+import { useNavigationStore } from "../../store/navigationStore";
+import { prefetchPageLinks } from "../PageViewport/PageViewport";
 import "./Toolbar.css";
 
 export default function Toolbar() {
@@ -12,6 +14,7 @@ export default function Toolbar() {
     currentPage,
     pageCount,
     scale,
+    documentId,
     setCurrentPage,
     setScale,
     setDocument,
@@ -19,6 +22,7 @@ export default function Toolbar() {
 
   const { setSearchOpen, isSearchOpen } = useSearchStore();
   const { toggleSidebar, sidebarTab } = useViewStore();
+  const { goBack, goForward, canGoBack, canGoForward } = useNavigationStore();
 
   const handleOpenFile = useCallback(async () => {
     try {
@@ -53,6 +57,24 @@ export default function Toolbar() {
   const zoomOut = () => setScale(Math.round((scale - 0.25) * 100) / 100);
   const zoomFit = () => setScale(1.0);
 
+  const handleBack = useCallback(() => {
+    const target = goBack(currentPage);
+    if (target != null) {
+      setCurrentPage(target);
+      prefetchPageLinks(documentId, target);
+      (window as any).__scrollToPage?.(target);
+    }
+  }, [currentPage, goBack, setCurrentPage, documentId]);
+
+  const handleForward = useCallback(() => {
+    const target = goForward(currentPage);
+    if (target != null) {
+      setCurrentPage(target);
+      prefetchPageLinks(documentId, target);
+      (window as any).__scrollToPage?.(target);
+    }
+  }, [currentPage, goForward, setCurrentPage, documentId]);
+
   const prevPage = () => {
     if (currentPage > 0) {
       setCurrentPage(currentPage - 1);
@@ -86,6 +108,25 @@ export default function Toolbar() {
 
       {isOpen && (
         <>
+          <div className="toolbar-group">
+            <button
+              className="toolbar-btn"
+              onClick={handleBack}
+              disabled={!canGoBack()}
+              title="Go Back (Cmd+Left)"
+            >
+              &#9664;
+            </button>
+            <button
+              className="toolbar-btn"
+              onClick={handleForward}
+              disabled={!canGoForward()}
+              title="Go Forward (Cmd+Right)"
+            >
+              &#9654;
+            </button>
+          </div>
+
           <div className="toolbar-group toolbar-nav">
             <button className="toolbar-btn" onClick={prevPage} disabled={currentPage <= 0}>
               &lt;

@@ -20,6 +20,7 @@ pub fn run() {
             commands::document::open_pdf,
             commands::document::get_outline,
             commands::document::get_document_properties,
+            commands::document::get_page_links,
             commands::document::save_last_page,
             commands::render::render_page,
             commands::render::get_thumbnail,

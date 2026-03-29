@@ -7,6 +7,7 @@ use tauri::Manager;
 use crate::state::AppState;
 use crate::pdf::PdfDocument;
 use crate::pdf::document::{DocumentMetadata, PageSize, OutlineItem};
+use crate::pdf::renderer::RenderPriority;
 use crate::search::SearchIndexer;
 use crate::scheduler::TaskScheduler;
 use crate::history;
@@ -200,6 +201,69 @@ pub fn get_document_properties(
     let doc = state.document.read();
     let doc = doc.as_ref().ok_or("No document open")?;
     Ok(doc.metadata.clone())
+}
+
+/// Info about a single link on a page.
+#[derive(serde::Serialize, Clone)]
+pub struct LinkInfo {
+    /// Bounding rectangle in PDF points (unscaled).
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    /// For internal links: the 0-based target page number. -1 if external.
+    pub dest_page: i32,
+    /// The raw URI string. Internal links may have "#page=N" form;
+    /// external links are full URLs (https://...).
+    pub uri: String,
+}
+
+/// Return all links on a given page. Called lazily when the page becomes visible.
+///
+/// Uses the RenderPool worker threads which already have a cached `Document`
+/// handle, avoiding the expensive `Document::open` cost on large PDFs.
+///
+/// `priority`: 0 = Visible (current page), 1 = Prefetch (adjacent pages),
+///             2 = Thumbnail (low priority). Defaults to Prefetch if omitted.
+#[tauri::command]
+pub async fn get_page_links(
+    page_num: usize,
+    priority: Option<u8>,
+    state: State<'_, AppState>,
+) -> Result<Vec<LinkInfo>, String> {
+    let file_path = {
+        let doc = state.document.read();
+        doc.as_ref()
+            .ok_or("No document open")?
+            .file_path
+            .to_string_lossy()
+            .to_string()
+    };
+
+    let render_priority = match priority.unwrap_or(1) {
+        0 => RenderPriority::Visible,
+        2 => RenderPriority::Thumbnail,
+        _ => RenderPriority::Prefetch,
+    };
+
+    let raw_links = state
+        .render_pool
+        .extract_links(render_priority, file_path, page_num)
+        .await?;
+
+    let result = raw_links
+        .into_iter()
+        .map(|raw| LinkInfo {
+            x: raw.x,
+            y: raw.y,
+            width: raw.width,
+            height: raw.height,
+            dest_page: raw.dest_page,
+            uri: raw.uri,
+        })
+        .collect();
+
+    Ok(result)
 }
 
 /// Persist the last-viewed page for a file so it can be restored on reopen.

@@ -86,3 +86,26 @@
   border-radius: 3px;
   pointer-events: none;
 }
+
+.link-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  /* Above the image but below future text layer */
+  z-index: 2;
+}
+
+.page-link-area {
+  position: absolute;
+  pointer-events: auto;
+  cursor: pointer;
+  text-decoration: none;
+  /* Invisible by default */
+  background: transparent;
+  border-radius: 2px;
+  transition: background 0.15s;
+}
+
+.page-link-area:hover {
+  background: transparent;
+}

@@ -6,6 +6,7 @@ import type {
   SearchResult,
   SearchOptions,
   IndexStatus,
+  LinkInfo,
 } from "../types";
 
 export async function openPdf(path: string): Promise<DocumentInfo> {
@@ -45,6 +46,10 @@ export async function searchText(
 
 export async function getIndexStatus(): Promise<IndexStatus> {
   return invoke<IndexStatus>("get_index_status");
+}
+
+export async function getPageLinks(pageNum: number, priority?: number): Promise<LinkInfo[]> {
+  return invoke<LinkInfo[]>("get_page_links", { pageNum, priority: priority ?? 1 });
 }
 
 /// Convert raw byte data from Rust (number[], Uint8Array, or ArrayBuffer) to a blob URL
