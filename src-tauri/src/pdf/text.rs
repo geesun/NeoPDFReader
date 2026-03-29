@@ -3,6 +3,16 @@ use parking_lot::RwLock;
 use serde::Serialize;
 use std::sync::Arc;
 
+/// Per-character bounding box — used for precise search highlight positioning.
+/// Each entry corresponds to one character in the parent TextBlock's `text` string.
+#[derive(Debug, Clone, Serialize)]
+pub struct CharPosition {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
 /// A text block with position info — used for search highlight positioning
 #[derive(Debug, Clone, Serialize)]
 pub struct TextBlock {
@@ -11,6 +21,8 @@ pub struct TextBlock {
     pub y: f32,
     pub width: f32,
     pub height: f32,
+    /// Per-character bounding boxes. Length matches `text.chars().count()`.
+    pub char_positions: Vec<CharPosition>,
 }
 
 /// A full page text extraction result
@@ -46,23 +58,50 @@ pub fn extract_page_text_from_doc(doc: &Document, page_num: usize) -> Result<Pag
     for block in text_page.blocks() {
         if block.r#type() == TextBlockType::Text {
             for line in block.lines() {
-                let line_text: String = line.chars().filter_map(|c| c.char()).collect();
-                if !line_text.trim().is_empty() {
-                    let first_char = line.chars().next();
-                    let last_char = line.chars().last();
+                // Collect characters and their quads in one pass
+                let mut line_text = String::new();
+                let mut char_positions = Vec::new();
 
-                    let (x, y, width, height) = match (first_char, last_char) {
-                        (Some(fc), Some(lc)) => {
-                            let fc_origin = fc.origin();
-                            let lc_quad = lc.quad();
-                            (
-                                fc_origin.x,
-                                fc_origin.y - 12.0, // approximate ascent
-                                lc_quad.ur.x - fc_origin.x,
-                                14.0, // approximate line height
-                            )
-                        }
-                        _ => (0.0, 0.0, 0.0, 0.0),
+                for c in line.chars() {
+                    if let Some(ch) = c.char() {
+                        let q = c.quad();
+                        // Compute axis-aligned bounding box from the quad
+                        let cx = q.ul.x.min(q.ll.x);
+                        let cy = q.ul.y.min(q.ur.y);
+                        let cw = q.ur.x.max(q.lr.x) - cx;
+                        let ch_height = q.ll.y.max(q.lr.y) - cy;
+                        char_positions.push(CharPosition {
+                            x: cx,
+                            y: cy,
+                            width: cw,
+                            height: ch_height,
+                        });
+                        line_text.push(ch);
+                    }
+                }
+
+                if !line_text.trim().is_empty() {
+                    // Compute the overall line bounding box from char quads
+                    let (x, y, width, height) = if !char_positions.is_empty() {
+                        let min_x = char_positions
+                            .iter()
+                            .map(|p| p.x)
+                            .fold(f32::INFINITY, f32::min);
+                        let min_y = char_positions
+                            .iter()
+                            .map(|p| p.y)
+                            .fold(f32::INFINITY, f32::min);
+                        let max_x = char_positions
+                            .iter()
+                            .map(|p| p.x + p.width)
+                            .fold(f32::NEG_INFINITY, f32::max);
+                        let max_y = char_positions
+                            .iter()
+                            .map(|p| p.y + p.height)
+                            .fold(f32::NEG_INFINITY, f32::max);
+                        (min_x, min_y, max_x - min_x, max_y - min_y)
+                    } else {
+                        (0.0, 0.0, 0.0, 0.0)
                     };
 
                     blocks.push(TextBlock {
@@ -71,6 +110,7 @@ pub fn extract_page_text_from_doc(doc: &Document, page_num: usize) -> Result<Pag
                         y,
                         width,
                         height,
+                        char_positions,
                     });
                     full_text.push_str(&line_text);
                     full_text.push('\n');

@@ -155,7 +155,9 @@ pub fn search(
     Ok(results)
 }
 
-/// Find text highlight rectangles for a search query on a specific page
+/// Find text highlight rectangles for a search query on a specific page.
+/// Returns precise bounding boxes covering only the matched substring,
+/// not the entire line.
 fn find_highlights(
     indexer: &SearchIndexer,
     page_num: usize,
@@ -165,7 +167,12 @@ fn find_highlights(
     let mut highlights = Vec::new();
 
     if let Some(blocks) = indexer.get_text_blocks(page_num) {
-        let query_lower = query_str.to_lowercase();
+        let search_str = if options.case_sensitive {
+            query_str.to_string()
+        } else {
+            query_str.to_lowercase()
+        };
+
         for block in &blocks {
             let block_text = if options.case_sensitive {
                 block.text.clone()
@@ -173,19 +180,51 @@ fn find_highlights(
                 block.text.to_lowercase()
             };
 
-            let search_str = if options.case_sensitive {
-                query_str.to_string()
-            } else {
-                query_lower.clone()
-            };
+            // Find ALL occurrences of the search string in this block
+            let mut search_start = 0;
+            while let Some(byte_offset) = block_text[search_start..].find(&search_str) {
+                let match_byte_start = search_start + byte_offset;
+                let match_byte_end = match_byte_start + search_str.len();
 
-            if block_text.contains(&search_str) {
-                highlights.push(SearchHighlight {
-                    x: block.x,
-                    y: block.y,
-                    width: block.width,
-                    height: block.height,
-                });
+                // Convert byte offsets to char indices.
+                // block.char_positions is indexed by char index (one entry per char).
+                let char_start = block_text[..match_byte_start].chars().count();
+                let match_char_len = block_text[match_byte_start..match_byte_end].chars().count();
+                let char_end = char_start + match_char_len; // exclusive
+
+                // Compute bounding box from char positions for this match
+                if char_start < block.char_positions.len() && char_end <= block.char_positions.len()
+                {
+                    let match_positions = &block.char_positions[char_start..char_end];
+                    if !match_positions.is_empty() {
+                        let min_x = match_positions
+                            .iter()
+                            .map(|p| p.x)
+                            .fold(f32::INFINITY, f32::min);
+                        let min_y = match_positions
+                            .iter()
+                            .map(|p| p.y)
+                            .fold(f32::INFINITY, f32::min);
+                        let max_x = match_positions
+                            .iter()
+                            .map(|p| p.x + p.width)
+                            .fold(f32::NEG_INFINITY, f32::max);
+                        let max_y = match_positions
+                            .iter()
+                            .map(|p| p.y + p.height)
+                            .fold(f32::NEG_INFINITY, f32::max);
+
+                        highlights.push(SearchHighlight {
+                            x: min_x,
+                            y: min_y,
+                            width: max_x - min_x,
+                            height: max_y - min_y,
+                        });
+                    }
+                }
+
+                // Advance past this match to find the next one
+                search_start = match_byte_end;
             }
         }
     }
