@@ -666,17 +666,31 @@ const PageCanvas = memo(function PageCanvas({
   documentId,
   priority,
 }: PageCanvasProps) {
-  const imageKey = makeImageKey(documentId, pageNum, scale, rotation);
+  // Render at a higher resolution to account for HiDPI / Retina displays.
+  // The CSS display size stays at logical pixels (width * scale) while the
+  // actual PNG has `dpr` times as many pixels, making text crisp.
+  const dpr = window.devicePixelRatio || 1;
+  const renderScale = scale * dpr;
+  const imageKey = makeImageKey(documentId, pageNum, renderScale, rotation);
 
   // Initialise directly from the front-end cache so the first render already
   // has an image — no loading flash for previously seen pages.
+  // If no exact-DPR image is cached, fall back to a lower-res version
+  // (e.g. the pre-rendered scale=1.0 image) to avoid a blank flash while
+  // the HiDPI version is being fetched.
   const [displayedSrc, setDisplayedSrc] = useState<string | null>(
-    () => pageImageCache.get(imageKey) ?? null
+    () => {
+      const exact = pageImageCache.get(imageKey);
+      if (exact) return exact;
+      // Try the pre-render key (scale=1.0, rotation=0) as fallback.
+      const fallbackKey = makeImageKey(documentId, pageNum, 1.0, rotation);
+      return pageImageCache.get(fallbackKey) ?? null;
+    }
   );
 
   // The key we last successfully fetched.  Stored in a ref so priority changes
   // (overscan → visible) don't trigger a redundant re-fetch.
-  const fetchedKey = useRef<string>(displayedSrc ? imageKey : "");
+  const fetchedKey = useRef<string>(displayedSrc && pageImageCache.has(imageKey) ? imageKey : "");
 
   const displayWidth = width * scale;
   const displayHeight = height * scale;
@@ -695,7 +709,9 @@ const PageCanvas = memo(function PageCanvas({
 
     let cancelled = false;
 
-    invoke<ArrayBuffer>("render_page", { pageNum, scale, rotation, priority })
+    // Request the render at renderScale (logical scale × DPR) so the PNG
+    // has enough pixels for the physical display.
+    invoke<ArrayBuffer>("render_page", { pageNum, scale: renderScale, rotation, priority })
       .then((buf) => {
         if (cancelled) return;
         const url = bytesToBlobUrl(buf);
@@ -713,7 +729,7 @@ const PageCanvas = memo(function PageCanvas({
     };
     // priority intentionally excluded — only affects queue ordering, not output.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageNum, scale, rotation, documentId]);
+  }, [pageNum, renderScale, rotation, documentId]);
 
   return (
     <div
@@ -752,6 +768,7 @@ export default function PageViewport() {
     rotation,
     currentPage,
     setCurrentPage,
+    setScale,
     documentId,
     initialPage,
   } = useDocumentStore();
@@ -778,6 +795,8 @@ export default function PageViewport() {
   const pageOffsetsRef = useRef<number[]>([]);
   // Debounce timer for save_last_page
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Track previous scale so we can detect zoom changes and adjust scrollTop.
+  const prevScaleRef = useRef(scale);
 
   // Observe container resize
   useEffect(() => {
@@ -804,6 +823,22 @@ export default function PageViewport() {
 
   // Keep the ref in sync so scroll-restoration effect can read latest offsets.
   pageOffsetsRef.current = pageOffsets;
+
+  // ── Preserve current page when zoom scale changes ──
+  // When scale changes, pageOffsets are recomputed (all values shift).  We
+  // adjust scrollTop so the page the user was looking at stays in view.
+  // Uses useLayoutEffect to apply before paint, avoiding a visible jump frame.
+  const currentPageRef = useRef(currentPage);
+  currentPageRef.current = currentPage;
+  React.useLayoutEffect(() => {
+    if (prevScaleRef.current === scale) return;
+    prevScaleRef.current = scale;
+    if (!containerRef.current || pageOffsets.length === 0) return;
+    const page = Math.min(currentPageRef.current, pageOffsets.length - 1);
+    containerRef.current.scrollTop = pageOffsets[page];
+    setScrollTop(pageOffsets[page]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scale, pageOffsets]);
 
   // Restore scroll position when a new document is opened.
   // We run this effect whenever documentId changes *and* pageOffsets has been
@@ -902,6 +937,28 @@ export default function PageViewport() {
         return;
       }
 
+      // ── Zoom shortcuts: Cmd+= / Cmd+- / Cmd+0 ──
+      if (e.metaKey || e.ctrlKey) {
+        // Cmd+= or Cmd+Shift+= (the "+" key on most keyboards)
+        if (e.key === "=" || e.key === "+") {
+          e.preventDefault();
+          setScale(Math.round((scale + 0.25) * 100) / 100);
+          return;
+        }
+        // Cmd+-
+        if (e.key === "-") {
+          e.preventDefault();
+          setScale(Math.round((scale - 0.25) * 100) / 100);
+          return;
+        }
+        // Cmd+0 → reset to 100%
+        if (e.key === "0") {
+          e.preventDefault();
+          setScale(1.0);
+          return;
+        }
+      }
+
       switch (e.key) {
         case "PageDown": e.preventDefault(); scrollToPage(Math.min(currentPage + 1, pageCount - 1)); break;
         case "PageUp":   e.preventDefault(); scrollToPage(Math.max(currentPage - 1, 0)); break;
@@ -911,7 +968,7 @@ export default function PageViewport() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [isOpen, currentPage, pageCount, scrollToPage, documentId, setCurrentPage, goBack, goForward]);
+  }, [isOpen, currentPage, pageCount, scale, scrollToPage, documentId, setCurrentPage, setScale, goBack, goForward]);
 
   // Compute visible + overscan range
   const { visibleStart, visibleEnd, renderStart, renderEnd } = useMemo(() => {
