@@ -143,6 +143,10 @@
   /* No padding/margin — pure bounding box positioning */
   margin: 0;
   padding: 0;
+  /* scaleX stretches from the left edge to match PDF glyph width */
+  transform-origin: left top;
+  /* Use a common sans-serif stack — must match measureTextWidth() in JS */
+  font-family: sans-serif;
 }
 
 /* When the user selects text, show the standard blue selection highlight.

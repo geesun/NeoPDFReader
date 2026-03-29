@@ -239,6 +239,29 @@ const LinkLayer = memo(function LinkLayer({
 // Invisible text overlay that enables native browser text selection.
 // Each line is a <span> with `color: transparent` positioned over the page
 // image. The browser's native selection "just works" — Cmd+C copies text.
+//
+// Key trick: after rendering, we measure each span's natural text width with
+// a shared off-screen canvas and apply `transform: scaleX(targetW / naturalW)`
+// so the transparent text exactly covers the PDF-rendered glyphs regardless of
+// which system font the browser substitutes.
+
+/** Shared off-screen canvas context for measuring text width. Lazy-created. */
+let _measureCtx: CanvasRenderingContext2D | null = null;
+function getMeasureCtx(): CanvasRenderingContext2D {
+  if (!_measureCtx) {
+    const c = document.createElement("canvas");
+    _measureCtx = c.getContext("2d")!;
+  }
+  return _measureCtx;
+}
+
+/** Measure the natural pixel width of `text` at the given `fontSize` (px).
+ *  Uses the same font-family as `.text-line-span` in CSS. */
+function measureTextWidth(text: string, fontSize: number): number {
+  const ctx = getMeasureCtx();
+  ctx.font = `${fontSize}px sans-serif`;
+  return ctx.measureText(text).width;
+}
 
 const TextLayer = memo(function TextLayer({
   pageNum,
@@ -278,26 +301,38 @@ const TextLayer = memo(function TextLayer({
 
   return (
     <div className="text-layer">
-      {lines.map((line, i) => (
-        <React.Fragment key={i}>
-          <span
-            className="text-line-span"
-            style={{
-              left: line.x * scale,
-              top: line.y * scale,
-              width: line.width * scale,
-              height: line.height * scale,
-              fontSize: line.height * scale,
-              lineHeight: `${line.height * scale}px`,
-            }}
-          >
-            {line.text}
-          </span>
-          {/* Last line in block (paragraph end) → real newline.
-              Mid-paragraph soft wrap → space, so copy joins them naturally. */}
-          {line.is_last_in_block ? "\n" : " "}
-        </React.Fragment>
-      ))}
+      {lines.map((line, i) => {
+        const targetW = line.width * scale;
+        const fontSize = line.height * scale;
+        const naturalW = measureTextWidth(line.text, fontSize);
+        // scaleX ratio: stretch/compress the browser-rendered text to match
+        // the exact PDF glyph width. Clamp to avoid degenerate values.
+        const sx = naturalW > 0 ? targetW / naturalW : 1;
+
+        return (
+          <React.Fragment key={i}>
+            <span
+              className="text-line-span"
+              style={{
+                left: line.x * scale,
+                top: line.y * scale,
+                // Width must be the *target* width so the selection highlight
+                // covers the correct area. scaleX stretches the text to fill.
+                width: targetW,
+                height: line.height * scale,
+                fontSize,
+                lineHeight: `${line.height * scale}px`,
+                transform: `scaleX(${sx})`,
+              }}
+            >
+              {line.text}
+            </span>
+            {/* Last line in block (paragraph end) → real newline.
+                Mid-paragraph soft wrap → space, so copy joins them naturally. */}
+            {line.is_last_in_block ? "\n" : " "}
+          </React.Fragment>
+        );
+      })}
     </div>
   );
 });
