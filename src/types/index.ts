@@ -80,3 +80,17 @@ export interface LinkInfo {
   /** Raw URI — full URL for external links */
   uri: string;
 }
+
+export interface TextLineInfo {
+  /** The text content of this line */
+  text: string;
+  /** Bounding rect in PDF points (unscaled) */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** True if this is the last line in its paragraph (TextBlock).
+   *  Copy should insert \n only after last-in-block lines;
+   *  mid-paragraph soft-wrapped lines get a space instead. */
+  is_last_in_block: boolean;
+}

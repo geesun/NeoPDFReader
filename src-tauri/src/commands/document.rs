@@ -218,6 +218,22 @@ pub struct LinkInfo {
     pub uri: String,
 }
 
+/// Info about a single text line on a page, for the transparent text overlay.
+#[derive(serde::Serialize, Clone)]
+pub struct TextLineInfo {
+    /// The text content of the line.
+    pub text: String,
+    /// Bounding rectangle in PDF points (unscaled).
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    /// True if this is the last line in its paragraph (TextBlock).
+    /// Frontend inserts \n only after last-in-block lines; mid-paragraph
+    /// soft-wrapped lines get a space separator instead.
+    pub is_last_in_block: bool,
+}
+
 /// Return all links on a given page. Called lazily when the page becomes visible.
 ///
 /// Uses the RenderPool worker threads which already have a cached `Document`
@@ -278,4 +294,51 @@ pub fn save_last_page(
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
     history::set_last_page(&data_dir, &path, page);
     Ok(())
+}
+
+/// Return all text lines with bounding boxes for a given page.
+/// Called lazily when the page becomes visible, to build the transparent
+/// text overlay for native text selection.
+///
+/// `priority`: 0 = Visible, 1 = Prefetch, 2 = Thumbnail.
+/// Defaults to Prefetch if omitted.
+#[tauri::command]
+pub async fn get_page_text_lines(
+    page_num: usize,
+    priority: Option<u8>,
+    state: State<'_, AppState>,
+) -> Result<Vec<TextLineInfo>, String> {
+    let file_path = {
+        let doc = state.document.read();
+        doc.as_ref()
+            .ok_or("No document open")?
+            .file_path
+            .to_string_lossy()
+            .to_string()
+    };
+
+    let render_priority = match priority.unwrap_or(1) {
+        0 => RenderPriority::Visible,
+        2 => RenderPriority::Thumbnail,
+        _ => RenderPriority::Prefetch,
+    };
+
+    let raw_lines = state
+        .render_pool
+        .extract_text_lines(render_priority, file_path, page_num)
+        .await?;
+
+    let result = raw_lines
+        .into_iter()
+        .map(|raw| TextLineInfo {
+            text: raw.text,
+            x: raw.x,
+            y: raw.y,
+            width: raw.width,
+            height: raw.height,
+            is_last_in_block: raw.is_last_in_block,
+        })
+        .collect();
+
+    Ok(result)
 }

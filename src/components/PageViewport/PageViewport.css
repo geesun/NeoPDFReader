@@ -109,3 +109,45 @@
 .page-link-area:hover {
   background: transparent;
 }
+
+/* ── Text layer (invisible selectable text overlay) ─────────────────────────── */
+
+.text-layer {
+  position: absolute;
+  inset: 0;
+  /* Above link layer so text selection works */
+  z-index: 3;
+  /* Allow native text selection */
+  user-select: text;
+  -webkit-user-select: text;
+  /* Let clicks fall through to links in gaps between text spans */
+  pointer-events: none;
+  overflow: hidden;
+  /* Preserve \n text nodes between spans so copy gets line breaks */
+  white-space: pre;
+  /* Ensure bare \n text nodes are invisible (zero font size in container) */
+  font-size: 0;
+  line-height: 0;
+  color: transparent;
+}
+
+.text-line-span {
+  position: absolute;
+  /* Invisible text — browser can still select it */
+  color: transparent;
+  white-space: pre;
+  /* Re-enable pointer events so the browser can track selection drags */
+  pointer-events: auto;
+  /* Prevent the span from being a block that shifts layout */
+  display: block;
+  /* No padding/margin — pure bounding box positioning */
+  margin: 0;
+  padding: 0;
+}
+
+/* When the user selects text, show the standard blue selection highlight.
+   The text itself stays transparent but ::selection background reveals it. */
+.text-line-span::selection {
+  background: rgba(0, 100, 255, 0.3);
+  color: transparent;
+}

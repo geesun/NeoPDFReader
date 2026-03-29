@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, memo } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, memo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { bytesToBlobUrl, getPageLinks } from "../../services/tauriApi";
+import { bytesToBlobUrl, getPageLinks, getPageTextLines } from "../../services/tauriApi";
 import { useDocumentStore } from "../../store/documentStore";
 import { useSearchStore } from "../../store/searchStore";
 import { useNavigationStore } from "../../store/navigationStore";
-import type { LinkInfo } from "../../types";
+import type { LinkInfo, TextLineInfo } from "../../types";
 import "./PageViewport.css";
 // ─── Front-end page image cache ───────────────────────────────────────────────
 //
@@ -130,6 +130,25 @@ export function prefetchPageLinks(documentId: number, pageNum: number): void {
     .catch(() => {});
 }
 
+// ─── Text line cache ──────────────────────────────────────────────────────────
+//
+// Per-page text line data fetched lazily and cached per-document.
+// Key: `${documentId}:${pageNum}`
+// Cleared when a new document is opened.
+
+const pageTextCache = new Map<string, TextLineInfo[]>();
+let textCacheDocId = -1;
+
+function makeTextKey(documentId: number, pageNum: number) {
+  return `${documentId}:${pageNum}`;
+}
+
+function clearTextCache(documentId: number) {
+  if (textCacheDocId === documentId) return;
+  pageTextCache.clear();
+  textCacheDocId = documentId;
+}
+
 // ─── LinkLayer ────────────────────────────────────────────────────────────────
 
 const LinkLayer = memo(function LinkLayer({
@@ -210,6 +229,74 @@ const LinkLayer = memo(function LinkLayer({
             height: link.height * scale,
           }}
         />
+      ))}
+    </div>
+  );
+});
+
+// ─── TextLayer ────────────────────────────────────────────────────────────────
+//
+// Invisible text overlay that enables native browser text selection.
+// Each line is a <span> with `color: transparent` positioned over the page
+// image. The browser's native selection "just works" — Cmd+C copies text.
+
+const TextLayer = memo(function TextLayer({
+  pageNum,
+  scale,
+  documentId,
+  priority,
+}: {
+  pageNum: number;
+  scale: number;
+  documentId: number;
+  /** 0 = Visible (current page), 1 = Prefetch (overscan pages) */
+  priority: 0 | 1;
+}) {
+  const [lines, setLines] = useState<TextLineInfo[]>(() => {
+    return pageTextCache.get(makeTextKey(documentId, pageNum)) ?? [];
+  });
+
+  useEffect(() => {
+    const key = makeTextKey(documentId, pageNum);
+    const cached = pageTextCache.get(key);
+    if (cached) {
+      setLines(cached);
+      return;
+    }
+    let cancelled = false;
+    getPageTextLines(pageNum, priority)
+      .then((result) => {
+        if (cancelled) return;
+        pageTextCache.set(key, result);
+        setLines(result);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [pageNum, documentId, priority]);
+
+  if (lines.length === 0) return null;
+
+  return (
+    <div className="text-layer">
+      {lines.map((line, i) => (
+        <React.Fragment key={i}>
+          <span
+            className="text-line-span"
+            style={{
+              left: line.x * scale,
+              top: line.y * scale,
+              width: line.width * scale,
+              height: line.height * scale,
+              fontSize: line.height * scale,
+              lineHeight: `${line.height * scale}px`,
+            }}
+          >
+            {line.text}
+          </span>
+          {/* Last line in block (paragraph end) → real newline.
+              Mid-paragraph soft wrap → space, so copy joins them naturally. */}
+          {line.is_last_in_block ? "\n" : " "}
+        </React.Fragment>
       ))}
     </div>
   );
@@ -302,6 +389,7 @@ const PageCanvas = memo(function PageCanvas({
       {/* No spinner — white background shows while rendering, image fades in naturally */}
       <PageHighlights pageNum={pageNum} scale={scale} />
       <LinkLayer pageNum={pageNum} scale={scale} documentId={documentId} priority={priority} />
+      <TextLayer pageNum={pageNum} scale={scale} documentId={documentId} priority={priority} />
 
     </div>
   );
@@ -329,6 +417,7 @@ export default function PageViewport() {
   // Clear the front-end image cache whenever a new document is opened.
   clearImageCacheForDoc(documentId);
   clearLinkCache(documentId);
+  clearTextCache(documentId);
 
   // Clear navigation history when a new document is opened.
   const clearHistory = useNavigationStore((s) => s.clearHistory);

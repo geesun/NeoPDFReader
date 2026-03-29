@@ -1,4 +1,5 @@
-use mupdf::{Colorspace, Document, ImageFormat, Matrix};
+use mupdf::{Colorspace, Document, ImageFormat, Matrix, TextPageFlags};
+use mupdf::text_page::TextBlockType;
 use std::sync::{Arc, Condvar, Mutex};
 use std::collections::BinaryHeap;
 use std::cmp::Reverse;
@@ -29,6 +30,10 @@ enum TaskKind {
     ExtractLinks {
         reply: oneshot::Sender<Result<Vec<RawLinkInfo>, String>>,
     },
+    /// Extract text lines with bounding boxes (cheap — no rasterisation).
+    ExtractTextLines {
+        reply: oneshot::Sender<Result<Vec<RawTextLineInfo>, String>>,
+    },
 }
 
 /// Link info returned by the worker thread (before serialisation).
@@ -40,6 +45,24 @@ pub struct RawLinkInfo {
     pub height: f32,
     pub dest_page: i32,
     pub uri: String,
+}
+
+/// Text line info returned by the worker thread (before serialisation).
+/// Each entry represents one line of text with its bounding box in PDF points.
+#[derive(Debug, Clone)]
+pub struct RawTextLineInfo {
+    /// The text content of the line (with U+FFFD for unmappable chars — no char loss).
+    pub text: String,
+    /// Bounding box in PDF points (unscaled), origin at page top-left.
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    /// True if this is the last line within its TextBlock (paragraph).
+    /// Frontend uses this to decide whether to insert a real newline (\n)
+    /// after the line. Lines within the same block are soft-wrapped and
+    /// should be joined with a space on copy, not a newline.
+    pub is_last_in_block: bool,
 }
 
 /// A task sent to a worker thread.
@@ -126,6 +149,7 @@ impl RenderPool {
                                 match task.kind {
                                     TaskKind::Render { reply, .. } => { let _ = reply.send(Err(msg)); }
                                     TaskKind::ExtractLinks { reply } => { let _ = reply.send(Err(msg)); }
+                                    TaskKind::ExtractTextLines { reply } => { let _ = reply.send(Err(msg)); }
                                 }
                                 continue;
                             }
@@ -148,6 +172,11 @@ impl RenderPool {
                         TaskKind::ExtractLinks { reply } => {
                             if reply.is_closed() { continue; }
                             let result = extract_links_inner(doc, task.page_num);
+                            let _ = reply.send(result);
+                        }
+                        TaskKind::ExtractTextLines { reply } => {
+                            if reply.is_closed() { continue; }
+                            let result = extract_text_lines_inner(doc, task.page_num);
                             let _ = reply.send(result);
                         }
                     }
@@ -285,6 +314,34 @@ impl RenderPool {
             .await
             .map_err(|_| "Link extraction worker dropped reply".to_string())?
     }
+
+    /// Extract text lines with bounding boxes for a page.
+    /// Used by the text overlay layer for native text selection.
+    pub async fn extract_text_lines(
+        &self,
+        priority: RenderPriority,
+        file_path: String,
+        page_num: usize,
+    ) -> Result<Vec<RawTextLineInfo>, String> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        {
+            let mut guard = self.queue.heap.lock().unwrap();
+            let seq = guard.1;
+            guard.1 += 1;
+            guard.0.push(PoolTask {
+                priority,
+                seq,
+                file_path,
+                page_num,
+                kind: TaskKind::ExtractTextLines { reply: reply_tx },
+            });
+            // guard dropped here at end of block — before the .await
+        }
+        self.queue.condvar.notify_one();
+        reply_rx
+            .await
+            .map_err(|_| "Text extraction worker dropped reply".to_string())?
+    }
 }
 
 // RenderPool is Send+Sync: Arc<SharedQueue> is Send+Sync; workers own all mupdf handles.
@@ -377,4 +434,70 @@ fn extract_links_inner(
         });
     }
     Ok(result)
+}
+
+/// Extract text lines with bounding boxes from a page.
+///
+/// Uses `ACCURATE_BBOXES` for precise positioning. Iterates blocks → lines → chars,
+/// building one `RawTextLineInfo` per line. Characters where `char()` returns `None`
+/// (e.g. CID fonts without Unicode mapping) are replaced with U+FFFD — never skipped.
+fn extract_text_lines_inner(
+    doc: &Document,
+    page_num: usize,
+) -> Result<Vec<RawTextLineInfo>, String> {
+    let page = doc
+        .load_page(page_num as i32)
+        .map_err(|e| format!("Failed to load page {}: {}", page_num, e))?;
+
+    let text_page = page
+        .to_text_page(TextPageFlags::ACCURATE_BBOXES)
+        .map_err(|e| format!("Failed to extract text for page {}: {}", page_num, e))?;
+
+    let mut lines_out = Vec::new();
+
+    for block in text_page.blocks() {
+        // Only process text blocks, skip image blocks.
+        if block.r#type() != TextBlockType::Text {
+            continue;
+        }
+        // Collect lines in this block so we can mark the last one.
+        let block_lines: Vec<_> = block.lines().collect();
+        let last_idx = block_lines.len().saturating_sub(1);
+
+        for (li, line) in block_lines.iter().enumerate() {
+            let bounds = line.bounds();
+            let width = bounds.x1 - bounds.x0;
+            let height = bounds.y1 - bounds.y0;
+
+            // Skip degenerate lines (zero area).
+            if width <= 0.0 || height <= 0.0 {
+                continue;
+            }
+
+            // Build text from chars — U+FFFD for None, never skip.
+            let mut text = String::new();
+            for ch in line.chars() {
+                match ch.char() {
+                    Some(c) => text.push(c),
+                    None => text.push('\u{FFFD}'),
+                }
+            }
+
+            // Skip empty lines (all whitespace or no chars at all).
+            if text.trim().is_empty() {
+                continue;
+            }
+
+            lines_out.push(RawTextLineInfo {
+                text,
+                x: bounds.x0,
+                y: bounds.y0,
+                width,
+                height,
+                is_last_in_block: li == last_idx,
+            });
+        }
+    }
+
+    Ok(lines_out)
 }
