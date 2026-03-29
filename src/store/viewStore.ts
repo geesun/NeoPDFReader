@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-type SidebarTab = "thumbnails" | "bookmarks" | "search-results" | null;
+type SidebarTab = "thumbnails" | "bookmarks" | null;
 type Theme = "dark" | "light";
 
 interface ViewState {

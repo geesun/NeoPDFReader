@@ -11,22 +11,24 @@
   flex-shrink: 0;
 }
 
-.toolbar-group {
+/* Push everything after this to the right */
+.toolbar-spacer {
+  flex: 1;
+}
+
+/* Right-aligned icon group */
+.toolbar-right {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 0 4px;
 }
 
-.toolbar-group + .toolbar-group {
-  border-left: 1px solid var(--border-secondary);
-  margin-left: 4px;
-  padding-left: 8px;
-}
-
-/* Push rightmost group to the far right */
-.toolbar-spacer {
-  flex: 1;
+/* Thin vertical separator between icon groups */
+.toolbar-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border-secondary);
+  margin: 0 4px;
 }
 
 .toolbar-btn {
@@ -60,19 +62,10 @@
   cursor: default;
 }
 
-/* Theme toggle button */
-.theme-toggle {
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--text-primary);
-  padding: 4px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 16px;
-  line-height: 1;
-}
-
-.theme-toggle:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-secondary);
+/* Icon-only toolbar button */
+.toolbar-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px;
 }

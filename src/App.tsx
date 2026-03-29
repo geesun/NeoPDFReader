@@ -6,8 +6,7 @@ import { useViewStore } from "./store/viewStore";
 import { useTabStore } from "./store/tabStore";
 import { openFileDialog } from "./services/openFile";
 import TabBar from "./components/TabBar";
-import Toolbar from "./components/Toolbar";
-import SearchBar from "./components/SearchBar";
+import SearchPanel from "./components/SearchBar";
 import Sidebar from "./components/Sidebar";
 import PageViewport from "./components/PageViewport";
 import StatusBar from "./components/StatusBar";
@@ -98,11 +97,10 @@ function App() {
   return (
     <div className="app">
       <TabBar />
-      <Toolbar />
-      {!isHomeTab && <SearchBar />}
       <div className="app-main">
         {!isHomeTab && <Sidebar />}
         <PageViewport />
+        {!isHomeTab && <SearchPanel />}
       </div>
       {!isHomeTab && <StatusBar />}
     </div>

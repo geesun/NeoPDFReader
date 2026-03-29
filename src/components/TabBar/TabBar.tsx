@@ -3,6 +3,8 @@ import { useTabStore } from "../../store/tabStore";
 import { useDocumentStore } from "../../store/documentStore";
 import { useSearchStore } from "../../store/searchStore";
 import { useNavigationStore } from "../../store/navigationStore";
+import { useViewStore } from "../../store/viewStore";
+import { prefetchPageLinks } from "../PageViewport/PageViewport";
 import type { DocumentSnapshot, PdfTab } from "../../store/tabStore";
 import "./TabBar.css";
 
@@ -35,12 +37,9 @@ function restoreFullSnapshot(snapshot: DocumentSnapshot) {
   search.setResults(snapshot.searchResults);
   search.setCurrentResultIndex(snapshot.searchCurrentIndex);
   search.setSearchOpen(snapshot.isSearchOpen);
-  // Index state: we approximate by setting indexProgress/indexComplete directly
-  // via the store (these are not critical — the index will be rebuilt if needed).
 
   const nav = useNavigationStore.getState();
   nav.clearHistory();
-  // Restore back/forward stacks by setting them directly.
   useNavigationStore.setState({
     backStack: snapshot.backStack,
     forwardStack: snapshot.forwardStack,
@@ -51,13 +50,17 @@ export default function TabBar() {
   const tabs = useTabStore((s) => s.tabs);
   const activeTabId = useTabStore((s) => s.activeTabId);
   const { setActiveTab, closeTab, saveSnapshot, clearSnapshot } = useTabStore();
-  const { closeDocument } = useDocumentStore();
+
+  const { isOpen, currentPage, documentId, setCurrentPage, closeDocument } =
+    useDocumentStore();
+  const { setSearchOpen, isSearchOpen } = useSearchStore();
+  const { toggleSidebar, sidebarTab, theme, toggleTheme } = useViewStore();
+  const { goBack, goForward, canGoBack, canGoForward } = useNavigationStore();
 
   const handleSwitchTab = useCallback(
     (tabId: string) => {
       if (tabId === activeTabId) return;
 
-      // 1. Save current tab's state (if it's a PDF tab)
       const currentTab = tabs.find((t) => t.id === activeTabId);
       if (currentTab?.type === "pdf") {
         const snapshot = captureFullSnapshot();
@@ -66,16 +69,13 @@ export default function TabBar() {
         }
       }
 
-      // 2. Switch to the new tab
       setActiveTab(tabId);
 
-      // 3. Restore the new tab's state
       const newTab = tabs.find((t) => t.id === tabId);
       if (newTab?.type === "pdf" && (newTab as PdfTab).snapshot) {
         restoreFullSnapshot((newTab as PdfTab).snapshot!);
         clearSnapshot(tabId);
       } else if (newTab?.type === "home") {
-        // Switching to Home — clear document state
         closeDocument();
       }
     },
@@ -84,12 +84,10 @@ export default function TabBar() {
 
   const handleCloseTab = useCallback(
     (e: React.MouseEvent, tabId: string) => {
-      e.stopPropagation(); // Don't trigger the tab switch
+      e.stopPropagation();
       if (tabId === "home") return;
 
-      // If closing the active tab, we need to clean up first
       if (tabId === activeTabId) {
-        // Find the tab that will become active after close
         const idx = tabs.findIndex((t) => t.id === tabId);
         const rightNeighbour = tabs[idx + 1];
         const leftNeighbour = tabs[idx - 1];
@@ -99,7 +97,6 @@ export default function TabBar() {
           restoreFullSnapshot((nextTab as PdfTab).snapshot!);
           clearSnapshot(nextTab.id);
         } else {
-          // Going to home or another tab without snapshot
           closeDocument();
         }
       }
@@ -109,45 +106,143 @@ export default function TabBar() {
     [activeTabId, tabs, closeTab, clearSnapshot, closeDocument]
   );
 
+  const handleBack = useCallback(() => {
+    const target = goBack(currentPage);
+    if (target != null) {
+      setCurrentPage(target);
+      prefetchPageLinks(documentId, target);
+      (window as any).__scrollToPage?.(target);
+    }
+  }, [currentPage, goBack, setCurrentPage, documentId]);
+
+  const handleForward = useCallback(() => {
+    const target = goForward(currentPage);
+    if (target != null) {
+      setCurrentPage(target);
+      prefetchPageLinks(documentId, target);
+      (window as any).__scrollToPage?.(target);
+    }
+  }, [currentPage, goForward, setCurrentPage, documentId]);
+
   return (
     <div className="tab-bar">
-      {tabs.map((tab) => (
-        <div
-          key={tab.id}
-          className={`tab-item ${tab.id === activeTabId ? "active" : ""} ${tab.type === "home" ? "home" : ""}`}
-          onClick={() => handleSwitchTab(tab.id)}
-          title={tab.type === "pdf" ? (tab as PdfTab).filePath : "Home"}
-        >
-          {tab.type === "home" ? (
-            <svg
-              className="tab-home-icon"
-              width="14"
-              height="14"
-              viewBox="0 0 16 16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M2.5 6.5L8 2l5.5 4.5V13a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1V6.5z" />
-              <path d="M6 14V9h4v5" />
-            </svg>
-          ) : null}
-          <span className="tab-label">
-            {tab.type === "home" ? "Home" : (tab as PdfTab).title}
-          </span>
-          {tab.type === "pdf" && (
+      {/* ── Tabs ── */}
+      <div className="tab-bar-tabs">
+        {tabs.map((tab) => (
+          <div
+            key={tab.id}
+            className={`tab-item ${tab.id === activeTabId ? "active" : ""} ${tab.type === "home" ? "home" : ""}`}
+            onClick={() => handleSwitchTab(tab.id)}
+            title={tab.type === "pdf" ? (tab as PdfTab).filePath : "Home"}
+          >
+            {tab.type === "home" ? (
+              <svg
+                className="tab-home-icon"
+                width="14"
+                height="14"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M2.5 6.5L8 2l5.5 4.5V13a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1V6.5z" />
+                <path d="M6 14V9h4v5" />
+              </svg>
+            ) : null}
+            <span className="tab-label">
+              {tab.type === "home" ? "Home" : (tab as PdfTab).title}
+            </span>
+            {tab.type === "pdf" && (
+              <button
+                className="tab-close"
+                onClick={(e) => handleCloseTab(e, tab.id)}
+                title="Close tab"
+              >
+                {"×"}
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* ── Right-side action buttons ── */}
+      <div className="tab-bar-actions">
+        {isOpen && (
+          <>
             <button
-              className="tab-close"
-              onClick={(e) => handleCloseTab(e, tab.id)}
-              title="Close tab"
+              className="tab-action-btn"
+              onClick={handleBack}
+              disabled={!canGoBack()}
+              title="Go Back (Cmd+Left)"
             >
-              {"×"}
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none"
+                stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M10 3L5 8l5 5" />
+              </svg>
             </button>
+            <button
+              className="tab-action-btn"
+              onClick={handleForward}
+              disabled={!canGoForward()}
+              title="Go Forward (Cmd+Right)"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none"
+                stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M6 3l5 5-5 5" />
+              </svg>
+            </button>
+
+            <div className="tab-action-sep" />
+
+            <button
+              className={`tab-action-btn ${sidebarTab ? "active" : ""}`}
+              onClick={() => toggleSidebar(sidebarTab || "thumbnails")}
+              title="Toggle Sidebar"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none"
+                stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="1.5" y="2" width="13" height="12" rx="1.5" />
+                <line x1="5.5" y1="2" x2="5.5" y2="14" />
+              </svg>
+            </button>
+
+            <button
+              className={`tab-action-btn ${isSearchOpen ? "active" : ""}`}
+              onClick={() => setSearchOpen(!isSearchOpen)}
+              title="Search (Ctrl+F)"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none"
+                stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="7" cy="7" r="4.5" />
+                <path d="M10.5 10.5L14 14" />
+              </svg>
+            </button>
+
+            <div className="tab-action-sep" />
+          </>
+        )}
+
+        <button
+          className="tab-action-btn"
+          onClick={toggleTheme}
+          title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+        >
+          {theme === "dark" ? (
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"
+              stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="8" cy="8" r="3.5" />
+              <path d="M8 1.5v1M8 13.5v1M1.5 8h1M13.5 8h1M3.4 3.4l.7.7M11.9 11.9l.7.7M3.4 12.6l.7-.7M11.9 4.1l.7-.7" />
+            </svg>
+          ) : (
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"
+              stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M13.5 9.2A5.5 5.5 0 0 1 6.8 2.5 5.5 5.5 0 1 0 13.5 9.2z" />
+            </svg>
           )}
-        </div>
-      ))}
+        </button>
+      </div>
     </div>
   );
 }

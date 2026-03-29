@@ -3,7 +3,6 @@ import { useEffect, useState, useCallback, useRef, useMemo, memo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getOutline, bytesToBlobUrl } from "../../services/tauriApi";
 import { useDocumentStore } from "../../store/documentStore";
-import { useSearchStore } from "../../store/searchStore";
 import { useViewStore } from "../../store/viewStore";
 import type { OutlineItem } from "../../types";
 import "./Sidebar.css";
@@ -206,37 +205,6 @@ function BookmarkPanel() {
   );
 }
 
-function SearchResultPanel() {
-  const { results, currentResultIndex, setCurrentResultIndex } = useSearchStore();
-  const { setCurrentPage } = useDocumentStore();
-
-  if (results.length === 0) {
-    return <div className="sidebar-empty">No search results</div>;
-  }
-
-  return (
-    <div className="search-result-panel">
-      {results.map((result, i) => (
-        <div
-          key={i}
-          className={`search-result-item ${i === currentResultIndex ? "active" : ""}`}
-          onClick={() => {
-            setCurrentResultIndex(i);
-            setCurrentPage(result.page_num);
-            (window as any).__scrollToPage?.(result.page_num);
-          }}
-        >
-          <span className="result-page">p.{result.page_num + 1}</span>
-          <span className="result-snippet">{result.snippet}</span>
-          {result.match_count > 1 && (
-            <span className="result-count">({result.match_count})</span>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 export default function Sidebar() {
   const { sidebarTab, setSidebarTab, sidebarWidth } = useViewStore();
   const { isOpen } = useDocumentStore();
@@ -258,17 +226,10 @@ export default function Sidebar() {
         >
           Bookmarks
         </button>
-        <button
-          className={`sidebar-tab ${sidebarTab === "search-results" ? "active" : ""}`}
-          onClick={() => setSidebarTab("search-results")}
-        >
-          Results
-        </button>
       </div>
       <div className="sidebar-content">
         {sidebarTab === "thumbnails" && <ThumbnailPanel />}
         {sidebarTab === "bookmarks" && <BookmarkPanel />}
-        {sidebarTab === "search-results" && <SearchResultPanel />}
       </div>
     </div>
   );

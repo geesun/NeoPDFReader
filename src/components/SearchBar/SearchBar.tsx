@@ -4,7 +4,7 @@ import { useSearchStore } from "../../store/searchStore";
 import { useDocumentStore } from "../../store/documentStore";
 import "./SearchBar.css";
 
-export default function SearchBar() {
+export default function SearchPanel() {
   const {
     isSearchOpen,
     query,
@@ -104,32 +104,46 @@ export default function SearchBar() {
   if (!isSearchOpen) return null;
 
   return (
-    <div className="search-bar">
-      <div className="search-input-group">
+    <div className="search-panel">
+      <div className="search-panel-header">
+        <span className="search-panel-title">Search</span>
+        <button
+          className="search-panel-close"
+          onClick={() => {
+            clearSearch();
+            setSearchOpen(false);
+          }}
+          title="Close search"
+        >
+          {"×"}
+        </button>
+      </div>
+
+      <div className="search-panel-input-row">
         <input
           ref={inputRef}
           type="text"
-          className="search-input"
-          placeholder="Search in document..."
+          className="search-panel-input"
+          placeholder="Search..."
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
         />
-        <button className="search-btn" onClick={doSearch} disabled={isSearching}>
+        <button className="search-panel-go" onClick={doSearch} disabled={isSearching}>
           {isSearching ? "..." : "Go"}
         </button>
       </div>
 
-      <div className="search-options">
-        <label className="search-option">
+      <div className="search-panel-options">
+        <label className="search-panel-option">
           <input
             type="checkbox"
             checked={caseSensitive}
             onChange={(e) => setCaseSensitive(e.target.checked)}
           />
-          Aa
+          Case
         </label>
-        <label className="search-option">
+        <label className="search-panel-option">
           <input
             type="checkbox"
             checked={wholeWord}
@@ -137,40 +151,52 @@ export default function SearchBar() {
           />
           Word
         </label>
+        {results.length > 0 && (
+          <div className="search-panel-nav">
+            <button className="search-panel-nav-btn" onClick={() => navigateResult(-1)}>
+              {"↑"}
+            </button>
+            <span className="search-panel-count">
+              {currentResultIndex + 1}/{results.length}
+            </span>
+            <button className="search-panel-nav-btn" onClick={() => navigateResult(1)}>
+              {"↓"}
+            </button>
+          </div>
+        )}
       </div>
 
-      {results.length > 0 && (
-        <div className="search-nav">
-          <span className="search-count">
-            {currentResultIndex + 1} / {results.length}
-          </span>
-          <button className="search-nav-btn" onClick={() => navigateResult(-1)}>
-            &uarr;
-          </button>
-          <button className="search-nav-btn" onClick={() => navigateResult(1)}>
-            &darr;
-          </button>
-        </div>
-      )}
-
       {!indexComplete && (
-        <div className="index-progress">
+        <div className="search-panel-index-bar">
           <div
-            className="index-progress-bar"
+            className="search-panel-index-fill"
             style={{ width: `${indexProgress * 100}%` }}
           />
         </div>
       )}
 
-      <button
-        className="search-close-btn"
-        onClick={() => {
-          clearSearch();
-          setSearchOpen(false);
-        }}
-      >
-        x
-      </button>
+      <div className="search-panel-results">
+        {results.length === 0 && query.trim() && !isSearching && (
+          <div className="search-panel-empty">No results</div>
+        )}
+        {results.map((result, i) => (
+          <div
+            key={i}
+            className={`search-panel-result ${i === currentResultIndex ? "active" : ""}`}
+            onClick={() => {
+              setCurrentResultIndex(i);
+              setCurrentPage(result.page_num);
+              (window as any).__scrollToPage?.(result.page_num);
+            }}
+          >
+            <span className="search-result-page">p.{result.page_num + 1}</span>
+            <span className="search-result-snippet">{result.snippet}</span>
+            {result.match_count > 1 && (
+              <span className="search-result-match-count">({result.match_count})</span>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
