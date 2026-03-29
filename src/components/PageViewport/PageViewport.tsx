@@ -511,9 +511,13 @@ const TextLayer = memo(function TextLayer({
     el.style.cursor = link ? "pointer" : "text";
   }, [probeForLink]);
 
-  // ── Keyboard copy (Cmd+C / Ctrl+C) ──
+  // ── Keyboard: copy (Cmd+C) and Shift+Arrow selection ──
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      // Only respond when THIS TextLayer owns the active selection.
+      if (_activeSelectionClear !== clearSelection) return;
+
+      // ── Cmd/Ctrl+C — copy ──
       if ((e.metaKey || e.ctrlKey) && e.key === "c") {
         const a = anchorRef.current;
         const f = focusRef.current;
@@ -524,11 +528,58 @@ const TextLayer = memo(function TextLayer({
         if (!text) return;
         e.preventDefault();
         navigator.clipboard.writeText(text).catch(() => {});
+        return;
+      }
+
+      // ── Shift+Arrow — extend/shrink selection ──
+      if (!e.shiftKey) return;
+      const lines = linesRef.current;
+      if (lines.length === 0) return;
+
+      let f = focusRef.current;
+      const a = anchorRef.current;
+      // If no existing selection, place anchor at start of first line.
+      if (!a || !f) return;
+
+      let newFocus: Caret | null = null;
+
+      switch (e.key) {
+        case "ArrowLeft":
+          if (f.ch > 0) {
+            newFocus = { line: f.line, ch: f.ch - 1 };
+          } else if (f.line > 0) {
+            newFocus = { line: f.line - 1, ch: lines[f.line - 1].text.length };
+          }
+          break;
+        case "ArrowRight":
+          if (f.ch < lines[f.line].text.length) {
+            newFocus = { line: f.line, ch: f.ch + 1 };
+          } else if (f.line < lines.length - 1) {
+            newFocus = { line: f.line + 1, ch: 0 };
+          }
+          break;
+        case "ArrowUp":
+          if (f.line > 0) {
+            const prevLen = lines[f.line - 1].text.length;
+            newFocus = { line: f.line - 1, ch: Math.min(f.ch, prevLen) };
+          }
+          break;
+        case "ArrowDown":
+          if (f.line < lines.length - 1) {
+            const nextLen = lines[f.line + 1].text.length;
+            newFocus = { line: f.line + 1, ch: Math.min(f.ch, nextLen) };
+          }
+          break;
+      }
+
+      if (newFocus) {
+        e.preventDefault();
+        setFocus(newFocus);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []); // no deps — reads from refs
+  }, [clearSelection]); // clearSelection is stable (useCallback with [])
 
   // Cleanup global reference on unmount.
   useEffect(() => {
