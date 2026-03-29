@@ -701,8 +701,8 @@ function HomeScreen() {
 
   return (
     <div className="home-screen">
-      <h1 className="home-title">neoPdfReader</h1>
-      <p className="home-subtitle">Fast, lightweight PDF reader</p>
+      <h1 className="home-title">Neo PDF Reader</h1>
+      <p className="home-subtitle">Built for fast PDF reading, even with large files</p>
 
       {recentFiles.length > 0 && (
         <div className="recent-grid">
