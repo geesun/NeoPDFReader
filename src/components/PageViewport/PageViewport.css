@@ -123,6 +123,7 @@
   /* Must receive mouse events for selection drag.  Link clicks underneath
      are forwarded programmatically (see TextLayer onMouseDown/onMouseUp). */
   pointer-events: auto;
+  /* Default cursor for text; dynamically switched to pointer over links by JS */
   cursor: text;
   overflow: hidden;
 }

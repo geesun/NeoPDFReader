@@ -404,11 +404,8 @@ const TextLayer = memo(function TextLayer({
   anchorRef.current = anchor;
   const focusRef = useRef(focus);
   focusRef.current = focus;
-
-  // Track mousedown screen position to detect click-vs-drag.
-  const downPosRef = useRef<{ x: number; y: number } | null>(null);
-  // True while the mouse button is held down (dragging).
-  const isDraggingRef = useRef(false);
+  const scaleRef = useRef(scale);
+  scaleRef.current = scale;
 
   // Register a clear callback so other pages can clear our selection.
   const clearSelection = useCallback(() => {
@@ -442,6 +439,21 @@ const TextLayer = memo(function TextLayer({
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   }, []);
 
+  /** Check if a screen point is over a link element underneath the text-layer.
+   *  Temporarily hides pointer-events on the text-layer to probe below. */
+  const probeForLink = useCallback((clientX: number, clientY: number): HTMLElement | null => {
+    const el = layerRef.current;
+    if (!el) return null;
+    const origPE = el.style.pointerEvents;
+    el.style.pointerEvents = "none";
+    const elements = document.elementsFromPoint(clientX, clientY);
+    el.style.pointerEvents = origPE;
+    for (const hit of elements) {
+      if (hit.classList.contains("page-link-area")) return hit as HTMLElement;
+    }
+    return null;
+  }, []);
+
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     // Only handle left-button.
     if (e.button !== 0) return;
@@ -454,66 +466,50 @@ const TextLayer = memo(function TextLayer({
     }
     _activeSelectionClear = clearSelection;
 
-    const caret = hitTestCaret(linesRef.current, scale, pos.x, pos.y);
+    const caret = hitTestCaret(linesRef.current, scaleRef.current, pos.x, pos.y);
     setAnchor(caret);
     setFocus(caret);
-    downPosRef.current = { x: e.clientX, y: e.clientY };
-    isDraggingRef.current = true;
     e.preventDefault(); // prevent browser native selection
-  }, [scale, localCoords, clearSelection]);
 
-  // Global mousemove / mouseup so dragging outside the layer still works.
-  useEffect(() => {
-    if (!anchor || !isDraggingRef.current) return;
+    const downX = e.clientX;
+    const downY = e.clientY;
 
-    const onMove = (e: MouseEvent) => {
-      const pos = localCoords(e);
-      if (!pos) return;
-      const caret = hitTestCaret(linesRef.current, scale, pos.x, pos.y);
-      setFocus(caret);
+    // Register global mousemove/mouseup SYNCHRONOUSLY — no useEffect race.
+    const onMove = (ev: MouseEvent) => {
+      const p = localCoords(ev);
+      if (!p) return;
+      const c = hitTestCaret(linesRef.current, scaleRef.current, p.x, p.y);
+      setFocus(c);
     };
 
-    const onUp = (e: MouseEvent) => {
-      isDraggingRef.current = false;
+    const onUp = (ev: MouseEvent) => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
 
       // If the mouse barely moved, treat this as a click — forward to link.
-      const dp = downPosRef.current;
-      if (dp) {
-        const dx = e.clientX - dp.x;
-        const dy = e.clientY - dp.y;
-        if (Math.sqrt(dx * dx + dy * dy) < CLICK_THRESHOLD) {
-          // No real drag — clear selection and try to forward click to a link.
-          setAnchor(null);
-          setFocus(null);
-
-          // Temporarily hide the text-layer so elementsFromPoint can see links.
-          const el = layerRef.current;
-          if (el) {
-            const origPE = el.style.pointerEvents;
-            el.style.pointerEvents = "none";
-            const elements = document.elementsFromPoint(e.clientX, e.clientY);
-            el.style.pointerEvents = origPE;
-            for (const hit of elements) {
-              if (hit.classList.contains("page-link-area")) {
-                (hit as HTMLElement).click();
-                break;
-              }
-            }
-          }
-        }
+      const dx = ev.clientX - downX;
+      const dy = ev.clientY - downY;
+      if (Math.sqrt(dx * dx + dy * dy) < CLICK_THRESHOLD) {
+        // No real drag — clear selection.
+        setAnchor(null);
+        setFocus(null);
+        // Try to forward click to a link underneath.
+        const link = probeForLink(ev.clientX, ev.clientY);
+        if (link) link.click();
       }
-      downPosRef.current = null;
     };
 
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-  }, [anchor, scale, localCoords]);
+  }, [localCoords, clearSelection, probeForLink]);
+
+  // ── Hover cursor: show pointer when over a link area ──
+  const onMouseMoveLocal = useCallback((e: React.MouseEvent) => {
+    const el = layerRef.current;
+    if (!el) return;
+    const link = probeForLink(e.clientX, e.clientY);
+    el.style.cursor = link ? "pointer" : "text";
+  }, [probeForLink]);
 
   // ── Keyboard copy (Cmd+C / Ctrl+C) ──
   useEffect(() => {
@@ -557,6 +553,7 @@ const TextLayer = memo(function TextLayer({
       ref={layerRef}
       className="text-layer"
       onMouseDown={onMouseDown}
+      onMouseMove={onMouseMoveLocal}
     >
       {/* Selection highlight rectangles */}
       {highlights.map((r, i) => (
