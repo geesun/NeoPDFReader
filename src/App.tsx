@@ -57,12 +57,13 @@ function App() {
           });
           if (selected) {
             const path = typeof selected === "string" ? selected : selected;
-            const info = await openPdf(path as string);
+            const dpr = window.devicePixelRatio || 1;
+            const info = await openPdf(path as string, dpr);
             // Inject the pre-rendered page into the cache BEFORE setDocument
             // bumps documentId, using the id that setDocument is about to assign.
             if (info.initial_page_png) {
               const nextDocumentId = useDocumentStore.getState().documentId + 1;
-              injectPrerenderedPage(nextDocumentId, info.last_page, info.initial_page_png);
+              injectPrerenderedPage(nextDocumentId, info.last_page, info.initial_page_png, dpr);
             }
             setDocument(info, path as string);
           }

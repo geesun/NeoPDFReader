@@ -41,14 +41,19 @@ function clearImageCacheForDoc(documentId: number) {
  * Called from App.tsx immediately after open_pdf returns, before setDocument,
  * using the documentId that setDocument is *about* to assign (current + 1).
  *
- * scale=1.0, rotation=0 matches the default view state on open.
+ * The pre-rendered PNG is at scale=dpr (e.g. 2.0 on Retina), rotation=0,
+ * which matches the default view state on open (logical scale=1.0 × DPR).
  */
 export function injectPrerenderedPage(
   documentId: number,
   pageNum: number,
   pngBase64: string,
+  dpr: number,
 ): void {
-  const key = makeImageKey(documentId, pageNum, 1.0, 0);
+  // The cache key must match what PageCanvas will look for:
+  // renderScale = logicalScale(1.0) × dpr.
+  const renderScale = 1.0 * dpr;
+  const key = makeImageKey(documentId, pageNum, renderScale, 0);
   // If there's already an entry (e.g. user reopened same file), revoke old URL.
   const existing = pageImageCache.get(key);
   if (existing) URL.revokeObjectURL(existing);
@@ -675,22 +680,13 @@ const PageCanvas = memo(function PageCanvas({
 
   // Initialise directly from the front-end cache so the first render already
   // has an image — no loading flash for previously seen pages.
-  // If no exact-DPR image is cached, fall back to a lower-res version
-  // (e.g. the pre-rendered scale=1.0 image) to avoid a blank flash while
-  // the HiDPI version is being fetched.
   const [displayedSrc, setDisplayedSrc] = useState<string | null>(
-    () => {
-      const exact = pageImageCache.get(imageKey);
-      if (exact) return exact;
-      // Try the pre-render key (scale=1.0, rotation=0) as fallback.
-      const fallbackKey = makeImageKey(documentId, pageNum, 1.0, rotation);
-      return pageImageCache.get(fallbackKey) ?? null;
-    }
+    () => pageImageCache.get(imageKey) ?? null
   );
 
   // The key we last successfully fetched.  Stored in a ref so priority changes
   // (overscan → visible) don't trigger a redundant re-fetch.
-  const fetchedKey = useRef<string>(displayedSrc && pageImageCache.has(imageKey) ? imageKey : "");
+  const fetchedKey = useRef<string>(displayedSrc ? imageKey : "");
 
   const displayWidth = width * scale;
   const displayHeight = height * scale;

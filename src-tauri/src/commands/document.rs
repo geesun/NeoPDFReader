@@ -38,6 +38,7 @@ struct PageSizesChunk {
 #[tauri::command]
 pub async fn open_pdf(
     path: String,
+    dpr: Option<f32>,
     state: State<'_, AppState>,
     app_handle: tauri::AppHandle,
 ) -> Result<DocumentInfo, String> {
@@ -56,6 +57,10 @@ pub async fn open_pdf(
     // thread — eliminating one full render_page IPC round-trip.
     const EAGER_PAGES: usize = 16;
 
+    // Device pixel ratio for pre-rendering the initial page at the correct
+    // resolution.  Defaults to 1.0 if the frontend doesn't send it.
+    let render_scale = dpr.unwrap_or(1.0).max(1.0);
+
     // Read history on the async thread (fast — tiny JSON file).
     let last_page = match app_handle.path().app_data_dir() {
         Ok(data_dir) => history::get_last_page(&data_dir, &path),
@@ -65,7 +70,7 @@ pub async fn open_pdf(
     let path_owned = path.clone();
     let (doc, eager_sizes, page_count, initial_page_png_bytes) =
         tokio::task::spawn_blocking(move || {
-            PdfDocument::open_partial(Path::new(&path_owned), EAGER_PAGES, last_page)
+            PdfDocument::open_partial(Path::new(&path_owned), EAGER_PAGES, last_page, render_scale)
         })
         .await
         .map_err(|e| format!("open task panicked: {}", e))??;
@@ -89,9 +94,9 @@ pub async fn open_pdf(
     state.bitmap_cache.clear();
 
     // Store the pre-rendered PNG in the bitmap cache so a subsequent
-    // render_page(last_page, scale=1.0, rotation=0) call returns instantly.
+    // render_page(last_page, scale=render_scale, rotation=0) call returns instantly.
     if let Some(png_bytes) = initial_page_png_bytes {
-        state.bitmap_cache.put(&path, last_page, 1.0, 0, png_bytes);
+        state.bitmap_cache.put(&path, last_page, render_scale, 0, png_bytes);
     }
 
     // Create new search indexer

@@ -10,8 +10,8 @@ import type {
   TextLineInfo,
 } from "../types";
 
-export async function openPdf(path: string): Promise<DocumentInfo> {
-  return invoke<DocumentInfo>("open_pdf", { path });
+export async function openPdf(path: string, dpr?: number): Promise<DocumentInfo> {
+  return invoke<DocumentInfo>("open_pdf", { path, dpr });
 }
 
 export async function renderPage(
