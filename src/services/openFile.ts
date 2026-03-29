@@ -4,7 +4,7 @@
  * and PageViewport.tsx.
  */
 import { open } from "@tauri-apps/plugin-dialog";
-import { openPdf } from "./tauriApi";
+import { openPdf, switchDocument } from "./tauriApi";
 import { useDocumentStore } from "../store/documentStore";
 import { useSearchStore } from "../store/searchStore";
 import { useNavigationStore } from "../store/navigationStore";
@@ -41,6 +41,8 @@ export async function openFileInTab(path: string): Promise<boolean> {
         tabStore.saveSnapshot(activeTabId, snapshot);
       }
     }
+    // Tell the Rust backend to switch to this document
+    await switchDocument(existing.filePath);
     // Restore the existing tab's snapshot
     if (existing.snapshot) {
       docStore.restoreSnapshot(existing.snapshot);

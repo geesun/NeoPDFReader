@@ -13,27 +13,15 @@ import "./PageViewport.css";
 //
 // Stores blob URLs for pages that have already been rendered.
 // Key: `${documentId}:${pageNum}:${scaleKey}:${rotation}`
-// When a PageCanvas mounts and its key is already in this map, it shows the
-// image immediately with zero loading flash.
-// When a new document is opened (documentId changes) the old entries are
-// revoked and cleared.
+// The cache is NOT cleared on document switch — each document uses a different
+// documentId prefix, so entries from different documents never collide.
+// This allows instant tab-switching without re-rendering pages.
 
 const pageImageCache = new Map<string, string>();
-let cachedDocumentId = -1;
 
 function makeImageKey(documentId: number, pageNum: number, scale: number, rotation: number) {
   // Round scale to 3 decimal places so tiny float noise doesn't create duplicate entries.
   return `${documentId}:${pageNum}:${scale.toFixed(3)}:${rotation}`;
-}
-
-function clearImageCacheForDoc(documentId: number) {
-  if (cachedDocumentId === documentId) return;
-  // Revoke all old blob URLs to free browser memory.
-  for (const url of pageImageCache.values()) {
-    URL.revokeObjectURL(url);
-  }
-  pageImageCache.clear();
-  cachedDocumentId = documentId;
 }
 
 /**
@@ -114,16 +102,9 @@ const PageHighlights = memo(function PageHighlights({
 // Cleared when a new document is opened.
 
 const pageLinkCache = new Map<string, LinkInfo[]>();
-let linkCacheDocId = -1;
 
 function makeLinkKey(documentId: number, pageNum: number) {
   return `${documentId}:${pageNum}`;
-}
-
-function clearLinkCache(documentId: number) {
-  if (linkCacheDocId === documentId) return;
-  pageLinkCache.clear();
-  linkCacheDocId = documentId;
 }
 
 /** Prefetch links for a page (e.g. jump target) so they're ready by the time
@@ -144,16 +125,9 @@ export function prefetchPageLinks(documentId: number, pageNum: number): void {
 // Cleared when a new document is opened.
 
 const pageTextCache = new Map<string, TextLineInfo[]>();
-let textCacheDocId = -1;
 
 function makeTextKey(documentId: number, pageNum: number) {
   return `${documentId}:${pageNum}`;
-}
-
-function clearTextCache(documentId: number) {
-  if (textCacheDocId === documentId) return;
-  pageTextCache.clear();
-  textCacheDocId = documentId;
 }
 
 // ─── LinkLayer ────────────────────────────────────────────────────────────────
@@ -865,11 +839,6 @@ export default function PageViewport() {
 
   const activeTool = useViewStore((s) => s.activeTool);
   const isHandTool = activeTool === "hand";
-
-  // Clear the front-end image cache whenever a new document is opened.
-  clearImageCacheForDoc(documentId);
-  clearLinkCache(documentId);
-  clearTextCache(documentId);
 
   // Clear navigation history when a new document is opened.
   const clearHistory = useNavigationStore((s) => s.clearHistory);

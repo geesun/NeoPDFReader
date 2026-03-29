@@ -12,14 +12,7 @@ pub async fn render_page(
     priority: Option<u8>,
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
-    let file_path = {
-        let doc = state.document.read();
-        doc.as_ref()
-            .ok_or("No document open")?
-            .file_path
-            .to_string_lossy()
-            .to_string()
-    };
+    let file_path = state.active_file_path()?;
 
     if let Some(cached) = state.bitmap_cache.get(&file_path, page_num, scale, rotation) {
         return Ok(Response::new(cached));
@@ -53,14 +46,7 @@ pub async fn get_thumbnail(
     page_num: usize,
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
-    let file_path = {
-        let doc = state.document.read();
-        doc.as_ref()
-            .ok_or("No document open")?
-            .file_path
-            .to_string_lossy()
-            .to_string()
-    };
+    let file_path = state.active_file_path()?;
 
     // Cache check for thumbnails too
     let thumb_scale = 0.0_f32; // sentinel: scale=0 means "thumbnail slot"

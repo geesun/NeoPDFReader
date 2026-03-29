@@ -66,6 +66,21 @@ export async function getFileThumbnail(path: string): Promise<string> {
   return invoke<string>("get_file_thumbnail", { path });
 }
 
+/**
+ * Lightweight document switch — tell the Rust backend to set a previously
+ * opened document as active.  Returns true if the document was found.
+ */
+export async function switchDocument(path: string): Promise<boolean> {
+  return invoke<boolean>("switch_document", { path });
+}
+
+/**
+ * Remove a document from Rust memory (called when a tab is closed).
+ */
+export async function closeDocument(path: string): Promise<void> {
+  return invoke<void>("close_document", { path });
+}
+
 /// Convert raw byte data from Rust (number[], Uint8Array, or ArrayBuffer) to a blob URL
 export function bytesToBlobUrl(bytes: number[] | Uint8Array | ArrayBuffer): string {
   let uint8: Uint8Array;

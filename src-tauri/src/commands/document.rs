@@ -90,8 +90,8 @@ pub async fn open_pdf(
 
     let doc = Arc::new(doc);
 
-    // Clear old caches
-    state.bitmap_cache.clear();
+    // Do NOT clear bitmap_cache — it's keyed by file_path hash, so entries
+    // from other documents are still valid and useful for tab switching.
 
     // Store the pre-rendered PNG in the bitmap cache so a subsequent
     // render_page(last_page, scale=render_scale, rotation=0) call returns instantly.
@@ -107,20 +107,22 @@ pub async fn open_pdf(
     // Create new search indexer
     let indexer = Arc::new(SearchIndexer::new(page_count)?);
 
-    // Store document and indexer in state
+    // Store document in the multi-document map and set it as active.
     {
-        let mut doc_state = state.document.write();
-        *doc_state = Some(doc.clone());
+        use crate::state::DocumentEntry;
+        let mut docs = state.documents.write();
+        docs.insert(
+            path.clone(),
+            DocumentEntry {
+                document: doc.clone(),
+                indexer: indexer.clone(),
+                outline: Vec::new(), // populated by Phase 2
+            },
+        );
     }
     {
-        let mut indexer_state = state.indexer.write();
-        *indexer_state = Some(indexer.clone());
-    }
-    // Outline starts empty; it will be populated by the Phase 2 background
-    // task without blocking the initial page display.
-    {
-        let mut outline_state = state.outline.write();
-        outline_state.clear();
+        let mut active = state.active_path.write();
+        *active = Some(path.clone());
     }
 
     // Pre-warm render pool: open the document on each worker so the first
@@ -159,8 +161,10 @@ pub async fn open_pdf(
             };
             {
                 let state2 = app4.state::<AppState>();
-                let mut out = state2.outline.write();
-                *out = outline;
+                let mut docs = state2.documents.write();
+                if let Some(entry) = docs.get_mut(&path2) {
+                    entry.outline = outline;
+                }
             }
 
             // Stream remaining page sizes in chunks of 64 (large docs only).
@@ -199,17 +203,17 @@ pub async fn open_pdf(
 pub async fn get_outline(
     state: State<'_, AppState>,
 ) -> Result<Vec<OutlineItem>, String> {
-    // Outline is cached in AppState during open_pdf — reading is instant.
-    let outline = state.outline.read().clone();
-    Ok(outline)
+    let path = state.active_file_path()?;
+    let docs = state.documents.read();
+    let entry = docs.get(&path).ok_or("No document open")?;
+    Ok(entry.outline.clone())
 }
 
 #[tauri::command]
 pub fn get_document_properties(
     state: State<'_, AppState>,
 ) -> Result<DocumentMetadata, String> {
-    let doc = state.document.read();
-    let doc = doc.as_ref().ok_or("No document open")?;
+    let (_, doc) = state.active_entry_path_and_doc()?;
     Ok(doc.metadata.clone())
 }
 
@@ -257,14 +261,7 @@ pub async fn get_page_links(
     priority: Option<u8>,
     state: State<'_, AppState>,
 ) -> Result<Vec<LinkInfo>, String> {
-    let file_path = {
-        let doc = state.document.read();
-        doc.as_ref()
-            .ok_or("No document open")?
-            .file_path
-            .to_string_lossy()
-            .to_string()
-    };
+    let file_path = state.active_file_path()?;
 
     let render_priority = match priority.unwrap_or(1) {
         0 => RenderPriority::Visible,
@@ -392,14 +389,7 @@ pub async fn get_page_text_lines(
     priority: Option<u8>,
     state: State<'_, AppState>,
 ) -> Result<Vec<TextLineInfo>, String> {
-    let file_path = {
-        let doc = state.document.read();
-        doc.as_ref()
-            .ok_or("No document open")?
-            .file_path
-            .to_string_lossy()
-            .to_string()
-    };
+    let file_path = state.active_file_path()?;
 
     let render_priority = match priority.unwrap_or(1) {
         0 => RenderPriority::Visible,
@@ -425,4 +415,52 @@ pub async fn get_page_text_lines(
         .collect();
 
     Ok(result)
+}
+
+/// Lightweight document switch — set a previously opened document as active.
+/// Called by the frontend when switching tabs.  Does NOT re-open the PDF or
+/// re-index; it only changes `active_path` and pre-warms the render pool.
+///
+/// Returns `true` if the switch succeeded (document was in the map).
+#[tauri::command]
+pub async fn switch_document(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    // Verify the document is still in our map.
+    {
+        let docs = state.documents.read();
+        if !docs.contains_key(&path) {
+            return Ok(false);
+        }
+    }
+
+    // Set as active.
+    {
+        let mut active = state.active_path.write();
+        *active = Some(path.clone());
+    }
+
+    // Pre-warm render pool workers with this file path so the first
+    // render call doesn't pay the Document::open cost.
+    state.render_pool.prewarm(path);
+
+    Ok(true)
+}
+
+/// Remove a document from the in-memory store (called when a tab is closed).
+/// Frees the PdfDocument + SearchIndexer + outline for that file.
+#[tauri::command]
+pub fn close_document(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut docs = state.documents.write();
+    docs.remove(&path);
+    // If this was the active document, clear active_path.
+    let mut active = state.active_path.write();
+    if active.as_deref() == Some(&path) {
+        *active = None;
+    }
+    Ok(())
 }

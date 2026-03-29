@@ -25,6 +25,8 @@ pub fn run() {
             commands::document::save_last_page,
             commands::document::get_recent_files,
             commands::document::get_file_thumbnail,
+            commands::document::switch_document,
+            commands::document::close_document,
             commands::render::render_page,
             commands::render::get_thumbnail,
             commands::search::search_text,

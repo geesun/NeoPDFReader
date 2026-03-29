@@ -4,6 +4,7 @@ import { useDocumentStore } from "../../store/documentStore";
 import { useSearchStore } from "../../store/searchStore";
 import { useNavigationStore } from "../../store/navigationStore";
 import { useViewStore } from "../../store/viewStore";
+import { switchDocument, closeDocument as closeDocumentBackend } from "../../services/tauriApi";
 import { prefetchPageLinks } from "../PageViewport/PageViewport";
 import type { DocumentSnapshot, PdfTab } from "../../store/tabStore";
 import "./TabBar.css";
@@ -73,7 +74,10 @@ export default function TabBar() {
 
       const newTab = tabs.find((t) => t.id === tabId);
       if (newTab?.type === "pdf" && (newTab as PdfTab).snapshot) {
-        restoreFullSnapshot((newTab as PdfTab).snapshot!);
+        const pdfTab = newTab as PdfTab;
+        // Tell Rust backend to switch to this document (lightweight, no re-open)
+        switchDocument(pdfTab.filePath).catch(() => {});
+        restoreFullSnapshot(pdfTab.snapshot!);
         clearSnapshot(tabId);
       } else if (newTab?.type === "home") {
         closeDocument();
@@ -87,6 +91,10 @@ export default function TabBar() {
       e.stopPropagation();
       if (tabId === "home") return;
 
+      // Get the filePath before closing so we can free Rust memory.
+      const closingTab = tabs.find((t) => t.id === tabId);
+      const closingPath = closingTab?.type === "pdf" ? (closingTab as PdfTab).filePath : null;
+
       if (tabId === activeTabId) {
         const idx = tabs.findIndex((t) => t.id === tabId);
         const rightNeighbour = tabs[idx + 1];
@@ -94,7 +102,9 @@ export default function TabBar() {
         const nextTab = rightNeighbour ?? leftNeighbour;
 
         if (nextTab?.type === "pdf" && (nextTab as PdfTab).snapshot) {
-          restoreFullSnapshot((nextTab as PdfTab).snapshot!);
+          const pdfTab = nextTab as PdfTab;
+          switchDocument(pdfTab.filePath).catch(() => {});
+          restoreFullSnapshot(pdfTab.snapshot!);
           clearSnapshot(nextTab.id);
         } else {
           closeDocument();
@@ -102,6 +112,11 @@ export default function TabBar() {
       }
 
       closeTab(tabId);
+
+      // Free the document from Rust backend memory.
+      if (closingPath) {
+        closeDocumentBackend(closingPath).catch(() => {});
+      }
     },
     [activeTabId, tabs, closeTab, clearSnapshot, closeDocument]
   );

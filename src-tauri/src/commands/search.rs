@@ -8,8 +8,10 @@ pub fn search_text(
     options: Option<SearchOptions>,
     state: State<'_, AppState>,
 ) -> Result<Vec<SearchResult>, String> {
-    let indexer = state.indexer.read();
-    let indexer = indexer.as_ref().ok_or("No search index available")?;
+    let path = state.active_file_path()?;
+    let docs = state.documents.read();
+    let entry = docs.get(&path).ok_or("No search index available")?;
+    let indexer = &entry.indexer;
 
     let opts = options.unwrap_or_default();
     query::search(indexer, &query_str, &opts)
@@ -24,8 +26,10 @@ pub struct IndexStatus {
 
 #[tauri::command]
 pub fn get_index_status(state: State<'_, AppState>) -> Result<IndexStatus, String> {
-    let indexer = state.indexer.read();
-    let indexer = indexer.as_ref().ok_or("No search index available")?;
+    let path = state.active_file_path()?;
+    let docs = state.documents.read();
+    let entry = docs.get(&path).ok_or("No search index available")?;
+    let indexer = &entry.indexer;
 
     Ok(IndexStatus {
         progress: indexer.progress(),
