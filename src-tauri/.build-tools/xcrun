@@ -1,11 +1,30 @@
 #!/bin/bash
 # Wrapper for xcrun that uses llvm-ar for 'ar' commands to support @file syntax.
-# macOS ar doesn't support @file (response file) syntax and has argument length limits.
+# macOS /usr/bin/ar does not support response files and can hit argv limits.
+
+set -e
 
 if [ "$1" = "ar" ]; then
-    shift  # remove "ar"
-    exec /opt/homebrew/opt/llvm/bin/llvm-ar "$@"
+    shift
+
+    if [ -n "$LLVM_AR" ] && [ -x "$LLVM_AR" ]; then
+        exec "$LLVM_AR" "$@"
+    fi
+
+    if command -v llvm-ar >/dev/null 2>&1; then
+        exec "$(command -v llvm-ar)" "$@"
+    fi
+
+    if [ -x /opt/homebrew/opt/llvm/bin/llvm-ar ]; then
+        exec /opt/homebrew/opt/llvm/bin/llvm-ar "$@"
+    fi
+
+    if [ -x /usr/local/opt/llvm/bin/llvm-ar ]; then
+        exec /usr/local/opt/llvm/bin/llvm-ar "$@"
+    fi
+
+    echo "error: llvm-ar not found. Set LLVM_AR or add llvm-ar to PATH." >&2
+    exit 1
 else
-    # For everything else, pass through to real xcrun
     exec /usr/bin/xcrun "$@"
 fi
