@@ -2,16 +2,19 @@ import { create } from "zustand";
 
 type SidebarTab = "thumbnails" | "bookmarks" | null;
 type Theme = "dark" | "light";
+export type ActiveTool = "hand" | "text-select";
 
 interface ViewState {
   sidebarTab: SidebarTab;
   sidebarWidth: number;
   theme: Theme;
+  activeTool: ActiveTool;
 
   setSidebarTab: (tab: SidebarTab) => void;
   toggleSidebar: (tab: SidebarTab) => void;
   setSidebarWidth: (width: number) => void;
   toggleTheme: () => void;
+  setActiveTool: (tool: ActiveTool) => void;
 }
 
 function getInitialTheme(): Theme {
@@ -26,6 +29,7 @@ export const useViewStore = create<ViewState>((set, get) => ({
   sidebarTab: null,
   sidebarWidth: 240,
   theme: getInitialTheme(),
+  activeTool: "hand",
 
   setSidebarTab: (tab) => set({ sidebarTab: tab }),
   toggleSidebar: (tab) => {
@@ -38,4 +42,5 @@ export const useViewStore = create<ViewState>((set, get) => ({
     try { localStorage.setItem("neo-pdf-theme", next); } catch { /* ignore */ }
     set({ theme: next });
   },
+  setActiveTool: (tool) => set({ activeTool: tool }),
 }));

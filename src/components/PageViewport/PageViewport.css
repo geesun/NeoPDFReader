@@ -6,6 +6,15 @@
   position: relative;
 }
 
+/* Hand tool: grab cursor for drag-to-pan */
+.page-viewport.hand-tool {
+  cursor: grab;
+}
+
+.page-viewport.hand-tool:active {
+  cursor: grabbing;
+}
+
 /* When empty, center the message */
 .page-viewport.empty {
   display: flex;
@@ -209,6 +218,13 @@
   /* Default cursor for text; dynamically switched to pointer over links by JS */
   cursor: text;
   overflow: hidden;
+}
+
+/* When hand tool is active, the text layer is non-interactive —
+   let pointer events pass through to the scroll container for drag-to-pan. */
+.text-layer.disabled {
+  pointer-events: none;
+  cursor: inherit;
 }
 
 .text-line-span {

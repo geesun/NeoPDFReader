@@ -54,7 +54,7 @@ export default function TabBar() {
   const { isOpen, currentPage, documentId, setCurrentPage, closeDocument } =
     useDocumentStore();
   const { setSearchOpen, isSearchOpen } = useSearchStore();
-  const { toggleSidebar, sidebarTab, theme, toggleTheme } = useViewStore();
+  const { toggleSidebar, sidebarTab, theme, toggleTheme, activeTool, setActiveTool } = useViewStore();
   const { goBack, goForward, canGoBack, canGoForward } = useNavigationStore();
 
   const handleSwitchTab = useCallback(
@@ -206,6 +206,34 @@ export default function TabBar() {
                 <rect x="1.5" y="2" width="13" height="12" rx="1.5" />
                 <line x1="5.5" y1="2" x2="5.5" y2="14" />
               </svg>
+            </button>
+
+            <button
+              className="tab-action-btn"
+              onClick={() => setActiveTool(activeTool === "hand" ? "text-select" : "hand")}
+              title={activeTool === "hand" ? "Switch to Text Select" : "Switch to Hand Tool"}
+            >
+              {activeTool === "hand" ? (
+                /* Hand icon — currently in hand mode */
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none"
+                  stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M5.5 8V3.5a1 1 0 0 1 2 0V7" />
+                  <path d="M7.5 7V2.5a1 1 0 0 1 2 0V7" />
+                  <path d="M9.5 7V3.5a1 1 0 0 1 2 0V7" />
+                  <path d="M11.5 7V5.5a1 1 0 0 1 2 0V10a4.5 4.5 0 0 1-4.5 4.5h-1A4.5 4.5 0 0 1 3.5 10V8a1 1 0 0 1 2 0" />
+                </svg>
+              ) : (
+                /* I-beam icon — currently in text-select mode */
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none"
+                  stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M6 2.5h1.5a2 2 0 0 1 2 2v0" />
+                  <path d="M10 2.5H8.5a2 2 0 0 0-2 2v0" />
+                  <line x1="8" y1="4.5" x2="8" y2="11.5" />
+                  <path d="M6 13.5h1.5a2 2 0 0 0 2-2v0" />
+                  <path d="M10 13.5H8.5a2 2 0 0 1-2-2v0" />
+                  <line x1="6.5" y1="8" x2="9.5" y2="8" />
+                </svg>
+              )}
             </button>
 
             <button

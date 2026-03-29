@@ -5,6 +5,7 @@ import { bytesToBlobUrl, getPageLinks, getPageTextLines, getRecentFiles, getFile
 import { useDocumentStore } from "../../store/documentStore";
 import { useSearchStore } from "../../store/searchStore";
 import { useNavigationStore } from "../../store/navigationStore";
+import { useViewStore } from "../../store/viewStore";
 import { openFileInTab, openFileDialog } from "../../services/openFile";
 import type { LinkInfo, TextLineInfo, RecentFileInfo } from "../../types";
 import "./PageViewport.css";
@@ -388,11 +389,14 @@ const TextLayer = memo(function TextLayer({
   scale,
   documentId,
   priority,
+  disabled,
 }: {
   pageNum: number;
   scale: number;
   documentId: number;
   priority: 0 | 1;
+  /** When true (hand tool active), the text layer is non-interactive. */
+  disabled?: boolean;
 }) {
   const [lines, setLines] = useState<TextLineInfo[]>(() => {
     return pageTextCache.get(makeTextKey(documentId, pageNum)) ?? [];
@@ -608,9 +612,9 @@ const TextLayer = memo(function TextLayer({
   return (
     <div
       ref={layerRef}
-      className="text-layer"
-      onMouseDown={onMouseDown}
-      onMouseMove={onMouseMoveLocal}
+      className={`text-layer${disabled ? " disabled" : ""}`}
+      onMouseDown={disabled ? undefined : onMouseDown}
+      onMouseMove={disabled ? undefined : onMouseMoveLocal}
     >
       {/* Selection highlight rectangles */}
       {highlights.map((r, i) => (
@@ -747,6 +751,8 @@ interface PageCanvasProps {
   documentId: number;
   /** 0 = visible (highest priority), 1 = prefetch */
   priority: 0 | 1;
+  /** When true (hand tool active), the text layer is non-interactive. */
+  textSelectionDisabled?: boolean;
 }
 
 const PageCanvas = memo(function PageCanvas({
@@ -757,6 +763,7 @@ const PageCanvas = memo(function PageCanvas({
   rotation,
   documentId,
   priority,
+  textSelectionDisabled,
 }: PageCanvasProps) {
   // Render at a higher resolution to account for HiDPI / Retina displays.
   // The CSS display size stays at logical pixels (width * scale) while the
@@ -830,7 +837,7 @@ const PageCanvas = memo(function PageCanvas({
       {/* No spinner — white background shows while rendering, image fades in naturally */}
       <PageHighlights pageNum={pageNum} scale={scale} />
       <LinkLayer pageNum={pageNum} scale={scale} documentId={documentId} priority={priority} />
-      <TextLayer pageNum={pageNum} scale={scale} documentId={documentId} priority={priority} />
+      <TextLayer pageNum={pageNum} scale={scale} documentId={documentId} priority={priority} disabled={textSelectionDisabled} />
 
     </div>
   );
@@ -856,6 +863,9 @@ export default function PageViewport() {
     initialPage,
   } = useDocumentStore();
 
+  const activeTool = useViewStore((s) => s.activeTool);
+  const isHandTool = activeTool === "hand";
+
   // Clear the front-end image cache whenever a new document is opened.
   clearImageCacheForDoc(documentId);
   clearLinkCache(documentId);
@@ -880,6 +890,75 @@ export default function PageViewport() {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track previous scale so we can detect zoom changes and adjust scrollTop.
   const prevScaleRef = useRef(scale);
+
+  // ── Hand tool: drag-to-pan ──
+  // We track the pointer start and only begin panning after the mouse moves
+  // beyond a small threshold (DRAG_THRESHOLD).  If the pointer is released
+  // before exceeding the threshold, the event is treated as a click and
+  // allowed to propagate to link elements underneath.
+  const DRAG_THRESHOLD = 4;
+  const isPanningRef = useRef(false);   // true once drag threshold exceeded
+  const pendingPanRef = useRef(false);  // true between pointerdown and decision
+  const dragStartRef = useRef({ x: 0, y: 0, scrollLeft: 0, scrollTop: 0 });
+  const pointerIdRef = useRef<number | null>(null);
+
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      if (!isHandTool || !isOpen) return;
+      if (e.button !== 0) return; // left button only
+      const container = containerRef.current;
+      if (!container) return;
+
+      // Record start position but do NOT capture or prevent default yet —
+      // we need the click to potentially reach link elements.
+      pendingPanRef.current = true;
+      isPanningRef.current = false;
+      pointerIdRef.current = e.pointerId;
+      dragStartRef.current = {
+        x: e.clientX,
+        y: e.clientY,
+        scrollLeft: container.scrollLeft,
+        scrollTop: container.scrollTop,
+      };
+    },
+    [isHandTool, isOpen],
+  );
+
+  const onPointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      if (!pendingPanRef.current || e.pointerId !== pointerIdRef.current) return;
+      const container = containerRef.current;
+      if (!container) return;
+
+      const dx = e.clientX - dragStartRef.current.x;
+      const dy = e.clientY - dragStartRef.current.y;
+
+      if (!isPanningRef.current) {
+        // Check threshold
+        if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
+        // Exceeded threshold — start panning.
+        isPanningRef.current = true;
+        container.setPointerCapture(e.pointerId);
+      }
+
+      container.scrollLeft = dragStartRef.current.scrollLeft - dx;
+      container.scrollTop = dragStartRef.current.scrollTop - dy;
+    },
+    [],
+  );
+
+  const onPointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      if (!pendingPanRef.current || e.pointerId !== pointerIdRef.current) return;
+      if (isPanningRef.current) {
+        containerRef.current?.releasePointerCapture(e.pointerId);
+      }
+      pendingPanRef.current = false;
+      isPanningRef.current = false;
+      pointerIdRef.current = null;
+    },
+    [],
+  );
 
   // Observe container resize
   useEffect(() => {
@@ -1088,8 +1167,11 @@ export default function PageViewport() {
   return (
     <div
       ref={containerRef}
-      className={`page-viewport${!isOpen ? " empty" : ""}`}
+      className={`page-viewport${!isOpen ? " empty" : ""}${isOpen && isHandTool ? " hand-tool" : ""}`}
       onScroll={isOpen ? handleScroll : undefined}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
     >
       {!isOpen ? (
         <HomeScreen />
@@ -1116,6 +1198,7 @@ export default function PageViewport() {
                     rotation={rotation}
                     documentId={documentId}
                     priority={priority}
+                    textSelectionDisabled={isHandTool}
                   />
                 </div>
               );
