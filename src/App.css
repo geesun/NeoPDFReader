@@ -1,3 +1,116 @@
+/* ── Theme variables ──────────────────────────────────────────────────────── */
+
+:root,
+[data-theme="dark"] {
+  --bg-app: #1e1e1e;
+  --bg-toolbar: #2d2d2d;
+  --bg-sidebar: #252526;
+  --bg-viewport: #525659;
+  --bg-input: #1e1e1e;
+  --bg-hover: #3a3a3a;
+  --bg-active: #444;
+  --bg-scrollbar-track: #2d2d2d;
+  --bg-scrollbar-thumb: #555;
+  --bg-scrollbar-thumb-hover: #666;
+
+  --border-primary: #1a1a1a;
+  --border-secondary: #444;
+
+  --text-primary: #ccc;
+  --text-secondary: #888;
+  --text-heading: #d0d0d0;
+  --text-muted: #b0b0b0;
+  --text-bright: #ddd;
+  --text-input: #ddd;
+  --text-zoom: #bbb;
+
+  --accent: #4a6fa5;
+  --accent-hover: #5a8fd5;
+  --accent-text: #fff;
+
+  --status-bar-bg: #007acc;
+  --status-bar-text: #fff;
+
+  --page-canvas-bg: #fff;
+  --page-canvas-shadow: rgba(0, 0, 0, 0.3);
+
+  --selection-bg: rgba(74, 111, 165, 0.4);
+  --text-selection-bg: rgba(0, 100, 255, 0.3);
+  --search-hl-bg: rgba(255, 200, 0, 0.35);
+  --search-hl-border: rgba(255, 160, 0, 0.6);
+  --search-hl-current-bg: rgba(255, 120, 0, 0.5);
+  --search-hl-current-border: rgba(255, 80, 0, 0.8);
+
+  --home-card-bg: #2a2a2a;
+  --home-card-border: #3a3a3a;
+  --home-card-hover-border: #5a8fd5;
+  --home-subtitle: #999;
+  --home-btn-bg: #4a6fa5;
+  --home-btn-hover-bg: #5a8fd5;
+  --home-hint-bg: rgba(255, 255, 255, 0.08);
+
+  --bg-tab-bar: #1e1e1e;
+  --bg-tab: #252526;
+  --bg-tab-hover: #333;
+  --text-tab: #999;
+}
+
+[data-theme="light"] {
+  --bg-app: #f5f5f5;
+  --bg-toolbar: #e8e8e8;
+  --bg-sidebar: #f0f0f0;
+  --bg-viewport: #d0d0d0;
+  --bg-input: #fff;
+  --bg-hover: #ddd;
+  --bg-active: #ccc;
+  --bg-scrollbar-track: #e0e0e0;
+  --bg-scrollbar-thumb: #b0b0b0;
+  --bg-scrollbar-thumb-hover: #999;
+
+  --border-primary: #ccc;
+  --border-secondary: #bbb;
+
+  --text-primary: #333;
+  --text-secondary: #666;
+  --text-heading: #222;
+  --text-muted: #555;
+  --text-bright: #222;
+  --text-input: #333;
+  --text-zoom: #555;
+
+  --accent: #3a7bd5;
+  --accent-hover: #2a6bc5;
+  --accent-text: #fff;
+
+  --status-bar-bg: #3a7bd5;
+  --status-bar-text: #fff;
+
+  --page-canvas-bg: #fff;
+  --page-canvas-shadow: rgba(0, 0, 0, 0.15);
+
+  --selection-bg: rgba(74, 111, 165, 0.3);
+  --text-selection-bg: rgba(0, 100, 255, 0.25);
+  --search-hl-bg: rgba(255, 200, 0, 0.4);
+  --search-hl-border: rgba(255, 160, 0, 0.7);
+  --search-hl-current-bg: rgba(255, 120, 0, 0.55);
+  --search-hl-current-border: rgba(255, 80, 0, 0.85);
+
+  --home-card-bg: #fff;
+  --home-card-border: #ddd;
+  --home-card-hover-border: #3a7bd5;
+  --home-subtitle: #888;
+  --home-btn-bg: #3a7bd5;
+  --home-btn-hover-bg: #2a6bc5;
+  --home-hint-bg: rgba(0, 0, 0, 0.06);
+
+  --bg-tab-bar: #e0e0e0;
+  --bg-tab: #d8d8d8;
+  --bg-tab-hover: #ddd;
+  --text-tab: #666;
+}
+
+/* ── Base reset ──────────────────────────────────────────────────────────── */
+
 * {
   margin: 0;
   padding: 0;
@@ -12,8 +125,8 @@ html, body, #root {
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
-  background: #1e1e1e;
-  color: #ccc;
+  background: var(--bg-app);
+  color: var(--text-primary);
 }
 
 .app {
@@ -36,19 +149,19 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: #2d2d2d;
+  background: var(--bg-scrollbar-track);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #555;
+  background: var(--bg-scrollbar-thumb);
   border-radius: 5px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #666;
+  background: var(--bg-scrollbar-thumb-hover);
 }
 
 /* Selection */
 ::selection {
-  background: rgba(74, 111, 165, 0.4);
+  background: var(--selection-bg);
 }

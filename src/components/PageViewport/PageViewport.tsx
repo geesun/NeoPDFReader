@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, memo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { bytesToBlobUrl, getPageLinks, getPageTextLines } from "../../services/tauriApi";
+import { bytesToBlobUrl, getPageLinks, getPageTextLines, getRecentFiles, getFileThumbnail } from "../../services/tauriApi";
 import { useDocumentStore } from "../../store/documentStore";
 import { useSearchStore } from "../../store/searchStore";
 import { useNavigationStore } from "../../store/navigationStore";
-import type { LinkInfo, TextLineInfo } from "../../types";
+import { openFileInTab, openFileDialog } from "../../services/openFile";
+import type { LinkInfo, TextLineInfo, RecentFileInfo } from "../../types";
 import "./PageViewport.css";
 // ─── Front-end page image cache ───────────────────────────────────────────────
 //
@@ -649,6 +650,92 @@ const TextLayer = memo(function TextLayer({
   );
 });
 
+// ─── HomeScreen ───────────────────────────────────────────────────────────────
+
+function HomeScreen() {
+  const [recentFiles, setRecentFiles] = useState<RecentFileInfo[]>([]);
+  const [thumbnails, setThumbnails] = useState<Map<string, string>>(new Map());
+
+  // Load recent files on mount
+  useEffect(() => {
+    getRecentFiles()
+      .then((files) => setRecentFiles(files))
+      .catch(() => {});
+  }, []);
+
+  // Fetch thumbnails for each recent file
+  useEffect(() => {
+    for (const file of recentFiles) {
+      if (thumbnails.has(file.path)) continue;
+      getFileThumbnail(file.path)
+        .then((base64) => {
+          setThumbnails((prev) => {
+            const next = new Map(prev);
+            next.set(file.path, `data:image/png;base64,${base64}`);
+            return next;
+          });
+        })
+        .catch(() => {});
+    }
+  }, [recentFiles]); // thumbnails intentionally excluded to avoid re-fetch loop
+
+  const handleOpenFile = useCallback(async () => {
+    try {
+      await openFileDialog();
+    } catch (err) {
+      console.error("Failed to open file:", err);
+    }
+  }, []);
+
+  const handleOpenRecent = useCallback(async (path: string) => {
+    try {
+      await openFileInTab(path);
+    } catch (err) {
+      console.error("Failed to open recent file:", err);
+    }
+  }, []);
+
+  return (
+    <div className="home-screen">
+      <h1 className="home-title">neoPdfReader</h1>
+      <p className="home-subtitle">Fast, lightweight PDF reader</p>
+
+      {recentFiles.length > 0 && (
+        <div className="recent-grid">
+          {recentFiles.map((file) => (
+            <div
+              key={file.path}
+              className="recent-card"
+              onClick={() => handleOpenRecent(file.path)}
+              title={file.path}
+            >
+              {thumbnails.has(file.path) ? (
+                <img
+                  className="recent-card-thumb"
+                  src={thumbnails.get(file.path)}
+                  alt={file.name}
+                  draggable={false}
+                />
+              ) : (
+                <div className="recent-card-thumb placeholder">PDF</div>
+              )}
+              <div className="recent-card-name">{file.name}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <button className="home-open-btn" onClick={handleOpenFile}>
+        Open PDF
+      </button>
+
+      <span className="home-hint">
+        {navigator.platform.includes("Mac") ? "\u2318" : "Ctrl"}+O to open file
+      </span>
+    </div>
+  );
+}
+
 // ─── PageCanvas ───────────────────────────────────────────────────────────────
 
 interface PageCanvasProps {
@@ -1005,11 +1092,7 @@ export default function PageViewport() {
       onScroll={isOpen ? handleScroll : undefined}
     >
       {!isOpen ? (
-        <div className="empty-message">
-          <h2>neoPdfReader</h2>
-          <p>Open a PDF file to get started</p>
-          <p className="shortcut-hint">Ctrl+O to open file</p>
-        </div>
+        <HomeScreen />
       ) : (
         <div className="page-scroll-container" style={{ height: totalHeight }}>
           {renderEnd >= renderStart &&

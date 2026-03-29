@@ -99,6 +99,11 @@ pub async fn open_pdf(
         state.bitmap_cache.put(&path, last_page, render_scale, 0, png_bytes);
     }
 
+    // Record this file in recent files list.
+    if let Ok(data_dir) = app_handle.path().app_data_dir() {
+        history::touch_recent(&data_dir, &path);
+    }
+
     // Create new search indexer
     let indexer = Arc::new(SearchIndexer::new(page_count)?);
 
@@ -285,6 +290,80 @@ pub async fn get_page_links(
         .collect();
 
     Ok(result)
+}
+
+/// Info about a recently opened file, returned to the frontend.
+#[derive(serde::Serialize)]
+pub struct RecentFileInfo {
+    pub path: String,
+    pub name: String,
+    pub last_opened: u64,
+}
+
+/// Return the list of recently opened files, filtering out files that no
+/// longer exist on disk.
+#[tauri::command]
+pub fn get_recent_files(
+    app_handle: tauri::AppHandle,
+) -> Result<Vec<RecentFileInfo>, String> {
+    let data_dir = app_handle.path().app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    let recent = history::load_recent(&data_dir);
+    let result: Vec<RecentFileInfo> = recent
+        .into_iter()
+        .filter(|r| Path::new(&r.path).exists())
+        .map(|r| RecentFileInfo {
+            path: r.path,
+            name: r.name,
+            last_opened: r.last_opened,
+        })
+        .collect();
+    Ok(result)
+}
+
+/// Render a small thumbnail of page 0 of an arbitrary PDF file (not the
+/// currently open document).  Returns a base64-encoded PNG string.
+///
+/// This opens the PDF on a blocking thread, renders only page 0 at a small
+/// scale, and closes it — it does NOT set the PDF as the current document.
+#[tauri::command]
+pub async fn get_file_thumbnail(
+    path: String,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let file_path = Path::new(&path);
+        if !file_path.exists() {
+            return Err(format!("File not found: {}", path));
+        }
+
+        let doc = mupdf::Document::open(file_path.to_str().unwrap_or(""))
+            .map_err(|e| format!("Failed to open PDF: {}", e))?;
+
+        let page = doc.load_page(0)
+            .map_err(|e| format!("Failed to load page 0: {}", e))?;
+
+        let bounds = page.bounds()
+            .map_err(|e| format!("Failed to get page bounds: {}", e))?;
+
+        let page_width = bounds.x1 - bounds.x0;
+        // Render at ~200px width for the thumbnail.
+        let thumb_scale = if page_width > 0.0 { 200.0 / page_width } else { 0.5 };
+
+        let matrix = mupdf::Matrix::new_scale(thumb_scale, thumb_scale);
+        let pixmap = page
+            .to_pixmap(&matrix, &mupdf::Colorspace::device_rgb(), false, true)
+            .map_err(|e| format!("to_pixmap: {}", e))?;
+
+        let mut buf = Vec::new();
+        pixmap
+            .write_to(&mut buf, mupdf::ImageFormat::PNG)
+            .map_err(|e| format!("write_to PNG: {}", e))?;
+
+        use base64::Engine;
+        Ok(base64::engine::general_purpose::STANDARD.encode(&buf))
+    })
+    .await
+    .map_err(|e| format!("thumbnail task panicked: {}", e))?
 }
 
 /// Persist the last-viewed page for a file so it can be restored on reopen.

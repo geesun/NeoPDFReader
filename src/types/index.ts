@@ -94,3 +94,9 @@ export interface TextLineInfo {
    *  mid-paragraph soft-wrapped lines get a space instead. */
   is_last_in_block: boolean;
 }
+
+export interface RecentFileInfo {
+  path: string;
+  name: string;
+  last_opened: number;
+}

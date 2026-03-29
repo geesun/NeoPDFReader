@@ -8,6 +8,7 @@ import type {
   IndexStatus,
   LinkInfo,
   TextLineInfo,
+  RecentFileInfo,
 } from "../types";
 
 export async function openPdf(path: string, dpr?: number): Promise<DocumentInfo> {
@@ -55,6 +56,14 @@ export async function getPageLinks(pageNum: number, priority?: number): Promise<
 
 export async function getPageTextLines(pageNum: number, priority?: number): Promise<TextLineInfo[]> {
   return invoke<TextLineInfo[]>("get_page_text_lines", { pageNum, priority: priority ?? 1 });
+}
+
+export async function getRecentFiles(): Promise<RecentFileInfo[]> {
+  return invoke<RecentFileInfo[]>("get_recent_files");
+}
+
+export async function getFileThumbnail(path: string): Promise<string> {
+  return invoke<string>("get_file_thumbnail", { path });
 }
 
 /// Convert raw byte data from Rust (number[], Uint8Array, or ArrayBuffer) to a blob URL

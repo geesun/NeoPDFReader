@@ -2,7 +2,7 @@
   flex: 1;
   overflow-y: auto;
   overflow-x: auto;
-  background: #525659;
+  background: var(--bg-viewport);
   position: relative;
 }
 
@@ -14,31 +14,114 @@
   justify-content: center;
 }
 
-.empty-message {
-  text-align: center;
-  color: #b0b0b0;
+/* ── Home screen ─────────────────────────────────────────────────────────── */
+
+.home-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 32px;
+  padding: 40px 24px;
+  max-width: 900px;
+  margin: 0 auto;
 }
 
-.empty-message h2 {
+.home-title {
   font-size: 28px;
   font-weight: 300;
-  margin-bottom: 12px;
-  color: #d0d0d0;
+  color: var(--text-heading);
+  margin-bottom: 0;
 }
 
-.empty-message p {
+.home-subtitle {
   font-size: 14px;
-  margin: 4px 0;
+  color: var(--home-subtitle);
+  margin-top: -16px;
 }
 
-.shortcut-hint {
-  margin-top: 16px !important;
-  padding: 6px 16px;
-  background: rgba(255, 255, 255, 0.08);
+/* Recent files grid */
+.recent-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 16px;
+  width: 100%;
+}
+
+.recent-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: var(--home-card-bg);
+  border: 1px solid var(--home-card-border);
+  border-radius: 8px;
+  padding: 10px;
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  overflow: hidden;
+}
+
+.recent-card:hover {
+  border-color: var(--home-card-hover-border);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+}
+
+.recent-card-thumb {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: contain;
   border-radius: 4px;
-  font-size: 12px !important;
+  background: var(--page-canvas-bg);
+}
+
+.recent-card-thumb.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  font-size: 24px;
+}
+
+.recent-card-name {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-primary);
+  text-align: center;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Open button on home screen */
+.home-open-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 32px;
+  background: var(--home-btn-bg);
+  color: var(--accent-text);
+  border: none;
+  border-radius: 6px;
+  font-size: 15px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.home-open-btn:hover {
+  background: var(--home-btn-hover-bg);
+}
+
+.home-hint {
+  padding: 6px 16px;
+  background: var(--home-hint-bg);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
   display: inline-block;
 }
+
+/* ── PDF page rendering area ─────────────────────────────────────────────── */
 
 .page-scroll-container {
   position: relative;
@@ -52,8 +135,8 @@
 }
 
 .page-canvas {
-  background: white;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  background: var(--page-canvas-bg);
+  box-shadow: 0 2px 8px var(--page-canvas-shadow);
   overflow: hidden;
 }
 
@@ -65,14 +148,14 @@
 
 .search-highlight {
   position: absolute;
-  background: rgba(255, 200, 0, 0.35);
-  border: 1px solid rgba(255, 160, 0, 0.6);
+  background: var(--search-hl-bg);
+  border: 1px solid var(--search-hl-border);
   border-radius: 2px;
 }
 
 .search-highlight.current {
-  background: rgba(255, 120, 0, 0.5);
-  border-color: rgba(255, 80, 0, 0.8);
+  background: var(--search-hl-current-bg);
+  border-color: var(--search-hl-current-border);
 }
 
 .page-number-label {
@@ -110,7 +193,7 @@
   background: transparent;
 }
 
-/* ── Text layer (custom selection overlay) ──────────────────────────────────── */
+/* ── Text layer (custom selection overlay) ──────────────────────────────── */
 
 .text-layer {
   position: absolute;
@@ -146,7 +229,7 @@
 /* Custom selection highlight rectangle painted by TextLayer */
 .text-selection-hl {
   position: absolute;
-  background: rgba(0, 100, 255, 0.3);
+  background: var(--text-selection-bg);
   pointer-events: none;
   border-radius: 1px;
 }

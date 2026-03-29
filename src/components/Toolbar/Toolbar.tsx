@@ -1,6 +1,4 @@
 import { useCallback } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
-import { openPdf } from "../../services/tauriApi";
 import { useDocumentStore } from "../../store/documentStore";
 import { useSearchStore } from "../../store/searchStore";
 import { useViewStore } from "../../store/viewStore";
@@ -12,50 +10,13 @@ export default function Toolbar() {
   const {
     isOpen,
     currentPage,
-    pageCount,
-    scale,
     documentId,
     setCurrentPage,
-    setScale,
-    setDocument,
   } = useDocumentStore();
 
   const { setSearchOpen, isSearchOpen } = useSearchStore();
-  const { toggleSidebar, sidebarTab } = useViewStore();
+  const { toggleSidebar, sidebarTab, theme, toggleTheme } = useViewStore();
   const { goBack, goForward, canGoBack, canGoForward } = useNavigationStore();
-
-  const handleOpenFile = useCallback(async () => {
-    try {
-      const selected = await open({
-        filters: [{ name: "PDF", extensions: ["pdf"] }],
-        multiple: false,
-      });
-      if (selected) {
-        const path = typeof selected === "string" ? selected : selected;
-        const info = await openPdf(path as string);
-        setDocument(info, path as string);
-      }
-    } catch (err) {
-      console.error("Failed to open file:", err);
-    }
-  }, [setDocument]);
-
-  const handlePageInput = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === "Enter") {
-        const val = parseInt((e.target as HTMLInputElement).value, 10);
-        if (!isNaN(val) && val >= 1 && val <= pageCount) {
-          setCurrentPage(val - 1);
-          (window as any).__scrollToPage?.(val - 1);
-        }
-      }
-    },
-    [pageCount, setCurrentPage]
-  );
-
-  const zoomIn = () => setScale(Math.round((scale + 0.25) * 100) / 100);
-  const zoomOut = () => setScale(Math.round((scale - 0.25) * 100) / 100);
-  const zoomFit = () => setScale(1.0);
 
   const handleBack = useCallback(() => {
     const target = goBack(currentPage);
@@ -75,26 +36,9 @@ export default function Toolbar() {
     }
   }, [currentPage, goForward, setCurrentPage, documentId]);
 
-  const prevPage = () => {
-    if (currentPage > 0) {
-      setCurrentPage(currentPage - 1);
-      (window as any).__scrollToPage?.(currentPage - 1);
-    }
-  };
-
-  const nextPage = () => {
-    if (currentPage < pageCount - 1) {
-      setCurrentPage(currentPage + 1);
-      (window as any).__scrollToPage?.(currentPage + 1);
-    }
-  };
-
   return (
     <div className="toolbar">
       <div className="toolbar-group">
-        <button className="toolbar-btn" onClick={handleOpenFile} title="Open PDF (Ctrl+O)">
-          Open
-        </button>
         {isOpen && (
           <button
             className={`toolbar-btn ${sidebarTab ? "active" : ""}`}
@@ -115,7 +59,7 @@ export default function Toolbar() {
               disabled={!canGoBack()}
               title="Go Back (Cmd+Left)"
             >
-              &#9664;
+              {"◀"}
             </button>
             <button
               className="toolbar-btn"
@@ -123,42 +67,7 @@ export default function Toolbar() {
               disabled={!canGoForward()}
               title="Go Forward (Cmd+Right)"
             >
-              &#9654;
-            </button>
-          </div>
-
-          <div className="toolbar-group toolbar-nav">
-            <button className="toolbar-btn" onClick={prevPage} disabled={currentPage <= 0}>
-              &lt;
-            </button>
-            <input
-              className="page-input"
-              type="text"
-              defaultValue={currentPage + 1}
-              key={currentPage}
-              onKeyDown={handlePageInput}
-              title="Go to page"
-            />
-            <span className="page-count">/ {pageCount}</span>
-            <button
-              className="toolbar-btn"
-              onClick={nextPage}
-              disabled={currentPage >= pageCount - 1}
-            >
-              &gt;
-            </button>
-          </div>
-
-          <div className="toolbar-group">
-            <button className="toolbar-btn" onClick={zoomOut} title="Zoom Out">
-              -
-            </button>
-            <span className="zoom-label">{Math.round(scale * 100)}%</span>
-            <button className="toolbar-btn" onClick={zoomIn} title="Zoom In">
-              +
-            </button>
-            <button className="toolbar-btn" onClick={zoomFit} title="Fit Page">
-              Fit
+              {"▶"}
             </button>
           </div>
 
@@ -173,6 +82,16 @@ export default function Toolbar() {
           </div>
         </>
       )}
+
+      <div className="toolbar-spacer" />
+
+      <button
+        className="theme-toggle"
+        onClick={toggleTheme}
+        title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+      >
+        {theme === "dark" ? "\u2600\uFE0F" : "\uD83C\uDF19"}
+      </button>
     </div>
   );
 }

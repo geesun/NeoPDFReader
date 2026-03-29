@@ -3,8 +3,8 @@
   align-items: center;
   height: 40px;
   padding: 0 8px;
-  background: #2d2d2d;
-  border-bottom: 1px solid #1a1a1a;
+  background: var(--bg-toolbar);
+  border-bottom: 1px solid var(--border-primary);
   gap: 4px;
   user-select: none;
   -webkit-user-select: none;
@@ -19,15 +19,20 @@
 }
 
 .toolbar-group + .toolbar-group {
-  border-left: 1px solid #444;
+  border-left: 1px solid var(--border-secondary);
   margin-left: 4px;
   padding-left: 8px;
+}
+
+/* Push rightmost group to the far right */
+.toolbar-spacer {
+  flex: 1;
 }
 
 .toolbar-btn {
   background: transparent;
   border: 1px solid transparent;
-  color: #ccc;
+  color: var(--text-primary);
   padding: 4px 10px;
   border-radius: 4px;
   cursor: pointer;
@@ -36,18 +41,18 @@
 }
 
 .toolbar-btn:hover {
-  background: #3a3a3a;
-  border-color: #555;
+  background: var(--bg-hover);
+  border-color: var(--border-secondary);
 }
 
 .toolbar-btn:active {
-  background: #444;
+  background: var(--bg-active);
 }
 
 .toolbar-btn.active {
-  background: #4a6fa5;
-  border-color: #5a8fd5;
-  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent-hover);
+  color: var(--accent-text);
 }
 
 .toolbar-btn:disabled {
@@ -55,31 +60,19 @@
   cursor: default;
 }
 
-.page-input {
-  width: 56px;
-  text-align: center;
-  background: #1e1e1e;
-  border: 1px solid #444;
-  color: #ddd;
-  border-radius: 3px;
-  padding: 3px 4px;
-  font-size: 13px;
+/* Theme toggle button */
+.theme-toggle {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-primary);
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
 }
 
-.page-input:focus {
-  outline: none;
-  border-color: #5a8fd5;
-}
-
-.page-count {
-  color: #888;
-  font-size: 13px;
-  margin: 0 4px;
-}
-
-.zoom-label {
-  color: #bbb;
-  font-size: 13px;
-  min-width: 44px;
-  text-align: center;
+.theme-toggle:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-secondary);
 }

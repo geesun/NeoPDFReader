@@ -1,10 +1,11 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
-import { openPdf } from "./services/tauriApi";
 import { useDocumentStore } from "./store/documentStore";
 import { useSearchStore } from "./store/searchStore";
-import { injectPrerenderedPage } from "./components/PageViewport/PageViewport";
+import { useViewStore } from "./store/viewStore";
+import { useTabStore } from "./store/tabStore";
+import { openFileDialog } from "./services/openFile";
+import TabBar from "./components/TabBar";
 import Toolbar from "./components/Toolbar";
 import SearchBar from "./components/SearchBar";
 import Sidebar from "./components/Sidebar";
@@ -19,8 +20,16 @@ interface PageSizesChunk {
 }
 
 function App() {
-  const { setDocument, appendPageSizes } = useDocumentStore();
+  const { appendPageSizes } = useDocumentStore();
   const { setIndexProgress, setIndexComplete } = useSearchStore();
+  const theme = useViewStore((s) => s.theme);
+  const activeTabId = useTabStore((s) => s.activeTabId);
+  const isHomeTab = activeTabId === "home";
+
+  // Apply theme attribute to the root element
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
 
   // Listen for backend events
   useEffect(() => {
@@ -47,26 +56,11 @@ function App() {
   // Global keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = async (e: KeyboardEvent) => {
-      // Ctrl+O: Open file
+      // Ctrl/Cmd+O: Open file
       if ((e.ctrlKey || e.metaKey) && e.key === "o") {
         e.preventDefault();
         try {
-          const selected = await open({
-            filters: [{ name: "PDF", extensions: ["pdf"] }],
-            multiple: false,
-          });
-          if (selected) {
-            const path = typeof selected === "string" ? selected : selected;
-            const dpr = window.devicePixelRatio || 1;
-            const info = await openPdf(path as string, dpr);
-            // Inject the pre-rendered page into the cache BEFORE setDocument
-            // bumps documentId, using the id that setDocument is about to assign.
-            if (info.initial_page_png) {
-              const nextDocumentId = useDocumentStore.getState().documentId + 1;
-              injectPrerenderedPage(nextDocumentId, info.last_page, info.initial_page_png, dpr);
-            }
-            setDocument(info, path as string);
-          }
+          await openFileDialog();
         } catch (err) {
           console.error("Failed to open file:", err);
         }
@@ -74,7 +68,7 @@ function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [setDocument]);
+  }, []);
 
   // Handle drag and drop
   useEffect(() => {
@@ -84,8 +78,6 @@ function App() {
       if (files && files.length > 0) {
         const file = files[0];
         if (file.name.toLowerCase().endsWith(".pdf")) {
-          // Tauri drag-drop gives us file paths via webview
-          // For now, just log — Tauri handles file drops differently
           console.log("Dropped file:", file.name);
         }
       }
@@ -105,13 +97,14 @@ function App() {
 
   return (
     <div className="app">
+      <TabBar />
       <Toolbar />
-      <SearchBar />
+      {!isHomeTab && <SearchBar />}
       <div className="app-main">
-        <Sidebar />
+        {!isHomeTab && <Sidebar />}
         <PageViewport />
       </div>
-      <StatusBar />
+      {!isHomeTab && <StatusBar />}
     </div>
   );
 }

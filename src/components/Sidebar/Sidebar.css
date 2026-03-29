@@ -1,6 +1,6 @@
 .sidebar {
-  background: #252526;
-  border-right: 1px solid #1a1a1a;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border-primary);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -9,7 +9,7 @@
 
 .sidebar-tabs {
   display: flex;
-  border-bottom: 1px solid #1a1a1a;
+  border-bottom: 1px solid var(--border-primary);
   flex-shrink: 0;
 }
 
@@ -18,19 +18,19 @@
   padding: 8px 4px;
   background: transparent;
   border: none;
-  color: #888;
+  color: var(--text-secondary);
   font-size: 11px;
   cursor: pointer;
   border-bottom: 2px solid transparent;
 }
 
 .sidebar-tab:hover {
-  color: #ccc;
+  color: var(--text-primary);
 }
 
 .sidebar-tab.active {
-  color: #ddd;
-  border-bottom-color: #4a6fa5;
+  color: var(--text-bright);
+  border-bottom-color: var(--accent);
 }
 
 .sidebar-content {
@@ -41,11 +41,11 @@
 .sidebar-empty {
   padding: 24px 16px;
   text-align: center;
-  color: #666;
+  color: var(--text-secondary);
   font-size: 13px;
 }
 
-/* Thumbnails — virtual scroll container */
+/* Thumbnails -- virtual scroll container */
 .thumbnail-panel-scroll {
   height: 100%;
   overflow-y: auto;
@@ -58,15 +58,15 @@
   border: 2px solid transparent;
   border-radius: 3px;
   padding: 4px;
-  width: 158px; /* 150px image + 4px padding × 2 */
+  width: 158px; /* 150px image + 4px padding x 2 */
 }
 
 .thumbnail-item:hover {
-  border-color: #555;
+  border-color: var(--border-secondary);
 }
 
 .thumbnail-item.active {
-  border-color: #4a6fa5;
+  border-color: var(--accent);
 }
 
 .thumbnail-item img {
@@ -78,13 +78,13 @@
 .thumbnail-placeholder {
   width: 150px;
   height: 200px;
-  background: #333;
+  background: var(--bg-hover);
 }
 
 .thumbnail-label {
   display: block;
   font-size: 11px;
-  color: #888;
+  color: var(--text-secondary);
   margin-top: 4px;
 }
 
@@ -103,17 +103,17 @@
   gap: 4px;
   padding: 4px 8px;
   cursor: pointer;
-  color: #ccc;
+  color: var(--text-primary);
   border-radius: 3px;
 }
 
 .bookmark-title:hover {
-  background: #333;
+  background: var(--bg-hover);
 }
 
 .bookmark-toggle {
   font-size: 8px;
-  color: #888;
+  color: var(--text-secondary);
   transition: transform 0.15s;
   display: inline-block;
   width: 12px;
@@ -149,29 +149,29 @@
 }
 
 .search-result-item:hover {
-  background: #333;
+  background: var(--bg-hover);
 }
 
 .search-result-item.active {
-  background: #4a6fa533;
+  background: rgba(74, 111, 165, 0.2);
 }
 
 .result-page {
-  color: #4a9fd5;
+  color: var(--accent-hover);
   font-weight: 600;
   flex-shrink: 0;
   min-width: 36px;
 }
 
 .result-snippet {
-  color: #aaa;
+  color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .result-count {
-  color: #666;
+  color: var(--text-secondary);
   font-size: 11px;
   flex-shrink: 0;
 }

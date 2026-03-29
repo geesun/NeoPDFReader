@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { DocumentInfo, PageSize, DocumentMetadata } from "../types";
+import type { DocumentSnapshot } from "./tabStore";
 
 interface DocumentState {
   isOpen: boolean;
@@ -23,9 +24,14 @@ interface DocumentState {
   setCurrentPage: (page: number) => void;
   setScale: (scale: number) => void;
   setRotation: (rotation: number) => void;
+
+  /** Capture a snapshot of the current document state (for tab switching). */
+  takeSnapshot: () => DocumentSnapshot | null;
+  /** Restore state from a snapshot (when switching back to a tab). */
+  restoreSnapshot: (snapshot: DocumentSnapshot) => void;
 }
 
-export const useDocumentStore = create<DocumentState>((set) => ({
+export const useDocumentStore = create<DocumentState>((set, get) => ({
   isOpen: false,
   filePath: null,
   documentId: 0,
@@ -92,4 +98,44 @@ export const useDocumentStore = create<DocumentState>((set) => ({
   setCurrentPage: (page) => set({ currentPage: page }),
   setScale: (scale) => set({ scale: Math.max(0.25, Math.min(6.4, scale)) }),
   setRotation: (rotation) => set({ rotation: rotation % 360 }),
+
+  takeSnapshot: () => {
+    const s = get();
+    if (!s.isOpen || !s.filePath || !s.metadata) return null;
+    // Search and navigation stores are read externally by the caller.
+    return {
+      filePath: s.filePath,
+      documentId: s.documentId,
+      metadata: s.metadata,
+      pageSizes: s.pageSizes,
+      pageCount: s.pageCount,
+      currentPage: s.currentPage,
+      scale: s.scale,
+      rotation: s.rotation,
+      initialPage: s.initialPage,
+      // Placeholders — caller fills these from searchStore & navigationStore.
+      searchQuery: "",
+      searchResults: [],
+      searchCurrentIndex: -1,
+      isSearchOpen: false,
+      indexProgress: 0,
+      indexComplete: false,
+      backStack: [],
+      forwardStack: [],
+    };
+  },
+
+  restoreSnapshot: (snapshot) =>
+    set({
+      isOpen: true,
+      filePath: snapshot.filePath,
+      documentId: snapshot.documentId,
+      metadata: snapshot.metadata,
+      pageSizes: snapshot.pageSizes,
+      pageCount: snapshot.pageCount,
+      currentPage: snapshot.currentPage,
+      scale: snapshot.scale,
+      rotation: snapshot.rotation,
+      initialPage: snapshot.currentPage, // Restore to the page user was viewing
+    }),
 }));
